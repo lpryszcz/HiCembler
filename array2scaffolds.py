@@ -11,6 +11,7 @@ import numpy as np
 from collections import Counter
 from datetime import datetime
 from fastq2array import logger
+from FastaIndex import FastaIndex
 
 def normalize_rows(a):
     """Normalise rows of give array."""
@@ -76,7 +77,7 @@ def load_matrix(fname, chrs=[], remove_nans=True, retain=1,
         bin_chr = bin_chr[valid_rowcols]
         bin_position = bin_position[valid_rowcols, :]
         
-    # eliminate zeros
+    # eliminate # contigs shorter than 3x window size
     if remove_shorter:
         c = Counter(np.diff(bin_position, axis=1)[:, 0])
         windowSize, occurencies = c.most_common(1)[0]
@@ -144,7 +145,7 @@ def array2tree(d, names, infile="", method="ward"):
     return t
 
 def get_name(contig):
-    return contig.split()[0] #contig.split('|')[-1].split('.')[0]
+    return contig.split()[0] 
 
 def mylayout(node):
     # don't show circles
@@ -164,7 +165,6 @@ def get_shuffled(d, bin_chr, bin_position, seed=0):
 def get_clusters(infile, t, contig2size, bin_chr):
     """Return clusters from tree"""
     # generate clusters
-    #logger("Generating subtrees...")
     subtrees=[]
     while len(t)>2:
         n, dist = t.get_farthest_leaf()
@@ -183,7 +183,6 @@ def get_clusters(infile, t, contig2size, bin_chr):
     contig2cluster = {get_name(c): Counter() for c in np.unique(bin_chr)}
     for i, subtree in enumerate(subtrees, 1):
         c = Counter(get_name(_n.name) for _n in subtree if _n.name)
-        #print " %s %s %s"%(i, len(subtree), c.most_common(3))
         total += len(subtree)
         correct += c.most_common(1)[0][1]
         # poplate contig2clustre
@@ -204,7 +203,6 @@ def get_clusters(infile, t, contig2size, bin_chr):
         mfrac = 1. * count / sum(counter.itervalues())
         clusters[clusteri].append(c)
         if mfrac<.66:
-            #print " %s %s: %s" %(c, sum(counter.itervalues()), str(counter.most_common(3)))
             weakCluster.append(c)
     print "  %s bp in %s contigs without assignment."%(sum(contig2size[c] for c in withoutCluster), len(withoutCluster))
     print "  %s bp in %s contigs having weak assignment."%(sum(contig2size[c] for c in weakCluster), len(weakCluster))
@@ -309,6 +307,7 @@ def _average_reduce_2d(A, keys):
         
 def clusters2scaffolds(clusters, d, bin_chr, bin_position, transform):
     """Process clusters into scaffolds."""
+    # easy for multithreading!
     scaffolds = []
     for i, contigs in enumerate(clusters, 1):
         # get part of matrix for particular scaffold
@@ -323,11 +322,21 @@ def clusters2scaffolds(clusters, d, bin_chr, bin_position, transform):
         scaffolds.append(scaffold)
     return scaffolds
             
-def array2scaffolds(infile):
+def array2scaffolds(infile, fasta):
     """Return scaffolds computed for given matrix"""
+    logger("Loading FastA...")
+    faidx = FastaIndex(fasta)
+    logger(" %s bp in %s contigs"%(faidx.genomeSize, len(faidx)))
+    
     logger("Loading matrix from %s ..."%infile)
-    d, bin_chr, bin_position, contig2size = load_matrix(infile)
-    logger(" loaded %s contigs summing %s bp"%(d.shape[0], sum(contig2size.values())))
+    d, bin_chr, bin_position, contig2size = load_matrix(infile, remove_shorter=True)
+    logger(" matrix of %s contigs summing %s bp"%(d.shape[0], sum(contig2size.values())))
+
+    # make sure all contigs from matrix are present in FastA
+    diff = set(contig2size.keys()).difference(faidx)
+    if diff:
+        sys.stderr.write("[ERROR] %s / %s contigs are missing from provided FastA!\n"%(len(diff), len(contig2size)))
+        sys.exit(1)
 
     #if shuffle: # don't use as positions assumed not shuffled matrix
     #    d, bin_chr, bin_position = get_shuffled(d, bin_chr, bin_position)
@@ -343,10 +352,33 @@ def array2scaffolds(infile):
     logger("Calculating linkage matrices & trees for %s clusters..."%len(clusters))
     scaffolds = clusters2scaffolds(clusters, d, bin_chr, bin_position, transform)
 
-    for i, scaffold in enumerate(scaffolds, 1):
-        print " scaffold%s"% i, len(scaffold), scaffold[0], scaffold[-1]
-        print " - ".join("%s_%s"%(c, o) for c, o in scaffold)
+    logger("Reporting %s scaffolds..."%len(clusters))
+    report_scaffolds(infile, scaffolds, faidx)
+    
     return clusters, scaffolds
+
+def report_scaffolds(infile, scaffolds, faidx, w=60):
+    """Save scaffolds"""
+    totsize = 0
+    fastafn = infile+".scaffolds.fa"
+    scaffoldfn = infile+".scaffolds.tab"
+    with open(fastafn, "w") as out, open(scaffoldfn, "w") as outscaffolds:
+        for i, scaffold in enumerate(scaffolds, 1):
+            seqs = []
+            elements = []
+            for c, o in scaffold:
+                seqs.append(faidx.get_sequence(c, reverse=o))
+                if o:
+                    elements.append("%s-"%c)
+                else:
+                    elements.append("%s+"%c)
+            # store seq and architecture
+            seq = "".join(seqs)
+            seq = "\n".join(seq[s:s+w] for s in range(0, len(seq), w))
+            out.write(">scaffold%s %s bp in %s contigs\n%s\n"%(i, len(seq), len(elements), seq))
+            outscaffolds.write("%s\n"%"\t".join(elements))
+            totsize += len(seq)
+    logger(" %s in %s scaffolds reported to %s"%(totsize, len(scaffolds), fastafn))
     
 def main():
     import argparse
@@ -357,12 +389,13 @@ def main():
     parser.add_argument("-v", "--verbose", default=False, action="store_true",
                         help="verbose")    
     parser.add_argument("-i", "--infile", required=True, help="Contact matrix .npz")
+    parser.add_argument("-f", "--fasta", required=True, type=file, help="Contigs FastA file")
 
     o = parser.parse_args()
     if o.verbose:
-        sys.stderr.write("Options: %s\n"%str(o))    
+        sys.stderr.write("Options: %s\n"%str(o))
     
-    array2scaffolds(o.infile)
+    array2scaffolds(o.infile, o.fasta)
     
 if __name__=="__main__":
     t0 = datetime.now()

@@ -84,7 +84,7 @@ def _get_snap_proc(fn1, fn2, ref, cores, verbose, log=sys.stderr, largemem=0):
         if verbose:
             log.write(" Creating index...\n  %s\n" % idxcmd)
         idxmessage = commands.getoutput(idxcmd)
-        log.write(idxmessage)    
+        log.write(idxmessage)
     # skip mate rescue
     args = ['snap-aligner', 'paired', idxfn, fn1, fn2, '--b', '-t', str(cores), '-o', '-sam', '-']
     if verbose:
