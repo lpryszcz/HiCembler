@@ -54,16 +54,21 @@ def fasta2windows(fasta, windowSize, verbose):
             skipped.append(size)
             continue
         for i in range(len(windowSize)):
+            # skip contig if shorter than given window
+            if size < windowSize[i]:
+                #print size, "skipped %s"%windowSize[i]
+                continue
             # get starting window
             chr2window[i][c] = len(windows[i])
             for start in range(0, size, windowSize[i]):
                 windows[i].append((c, start, start+windowSize[i]))
             # update last entry end
-            windows[i][-1] = (c, start, size)
+            # windows[i][-1] = (c, start, size)
         # get chromosome tick in the middle    
         base2chr[genomeSize+size/2] = c
         # update genomeSize
         genomeSize += size
+    print [len(w) for w in windows]
     if verbose:
         logger(' %s bases in %s contigs divided in %s-%s windows. '%(faidx.genomeSize, len(faidx), len(windows[0]), len(windows[-1])))
         if skipped:
@@ -207,7 +212,7 @@ def plot(outfn, a, genomeSize, base2chr, _windowSize, dpi=300):
     fig.savefig(outfn+".svg", dpi=dpi, papertype="a4")
 
 def fastq2array(fasta, fastq, outfn, windowSize, mapq=10, cores=1,
-                upto=float('inf'), dpi=300, dtype='uint16', verbose=1):
+                upto=float('inf'), dpi=300, dtype='float32', verbose=1):
     """Convert SAM to SSPACE TAB file."""
     # get windows
     windowSize, windows, chr2window, base2chr, genomeSize = fasta2windows(fasta, windowSize, verbose)

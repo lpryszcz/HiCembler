@@ -4,6 +4,16 @@ desc="""Report scaffolds by joining contigs based on contact matrix.
 TBD:
 - estimate distances between contigs in scaffold.
 - split scaffolds on weak / likely wrong connections
+- average array smartly for second iteration
+
+- for fragmented genomes, first build matrix for whole contigs,
+then dived them into scaffolds and create separate matrix for each scaffold
+ignoring iter-scaffold contacts
+
+- remember HiC has limited resolution (4k?, 2k?, 1k?), so you shouldn't use
+too low contigs anyway
+
+- to get orientation, don't use only last window, but half of the scaffold! 
 """
 epilog="""Author: l.p.pryszcz+git@gmail.com
 Bratislava, 25/10/2016
@@ -227,9 +237,9 @@ def get_clusters(outbase, infile, t, contig2size, bin_chr):
         for i, cluster in enumerate(clusters, 1):
             clSize = sum(contig2size[c] for c in cluster)
             totsize += clSize
-            print " %s %s bp in %s contigs" % (i, clSize, len(cluster))
+            #print " %s %s bp in %s contigs" % (i, clSize, len(cluster))
             out.write("\t".join(cluster)+"\n")
-    logger(" %3s bp in %s clusters!"%(totsize, len(clusters)))
+    logger(" %3s bp in %s clusters."%(totsize, len(clusters)))
     return clusters
 
 def get_reversed(scaffold):
@@ -454,12 +464,12 @@ def main():
         outbase = o.outbase
 
     # first iteration
-    logger("====== 1st ITERATION ======")
+    #logger("====== 1st ITERATION ======")
     scaffolds, fastafn = array2scaffolds(outbase, infile, infile2, o.fasta, o.threads, o.minWindows)
 
     # second iteration
-    logger("====== 2nd ITERATION ======")
-    scaffolds, fastafn = array2scaffolds(outbase+".iter2", infile, infile, fastafn, o.threads, o.minWindows, scaffolds)    
+    #logger("====== 2nd ITERATION ======")
+    #scaffolds, fastafn = array2scaffolds(outbase+".iter2", infile, infile, fastafn, o.threads, o.minWindows, scaffolds)    
     
 if __name__=="__main__":
     t0 = datetime.now()
