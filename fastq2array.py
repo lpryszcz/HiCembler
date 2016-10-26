@@ -35,7 +35,7 @@ def fasta2windows(fasta, windowSize, verbose):
     faidx = FastaIndex(fasta)
     # filter windows so they are smaller than largest chr and withing reasonalbe range toward genome size
     maxchrlen = max(faidx.id2stats[c][0] for c in faidx)
-    windowSize = filter(lambda x: 1000*x<maxchrlen and 1000*x<0.01*faidx.genomeSize and 1000*x>0.00001*faidx.genomeSize, windowSize)
+    windowSize = filter(lambda x: 1000*x<maxchrlen and 1000*x<0.01*faidx.genomeSize and 1000*x>0.000001*faidx.genomeSize, windowSize)
     if verbose:
         logger(" selected %s windows [kb]: %s"%(len(windowSize), str(windowSize)))
     windowSize = [w*1000 for w in windowSize]
