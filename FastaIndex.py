@@ -42,6 +42,7 @@ class FastaIndex(object):
         self.verbose = verbose
         self.log = log.write
         self.genomeSize = 0
+        self.whitespaces_in_headers = False
         # guess handle
         if type(handle) is str and os.path.isfile(handle): 
             handle = open(handle)
@@ -103,6 +104,9 @@ class FastaIndex(object):
             for i, l in enumerate(iter(self.handle.readline, ''), 1): 
                 if l.startswith(">"):
                     self.__process_seqentry(out, header, seq, offset, pi)
+                    # mark that there is whitespace in headers
+                    if len(l[:-1].slit())>1:
+                        self.whitespaces_in_headers = True
                     header = l
                     offset = self.handle.tell() 
                     seq = []
@@ -120,12 +124,15 @@ class FastaIndex(object):
         for l in open(self.faidx):
             ldata = l[:-1].split('\t')
             if len(ldata)<9:
+                self.whitespaces_in_headers = False
                 return 
             rid = ldata[0]
             stats = map(int, ldata[1:])
             self.id2stats[rid] = stats
             # update genomeSize
             self.genomeSize += stats[0]
+            if len(rid.split())>1:
+                self.whitespaces_in_headers = True
         return True
 
     def __len__(self):

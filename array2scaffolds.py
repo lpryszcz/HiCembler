@@ -12,6 +12,8 @@ ignoring iter-scaffold contacts
 
 - remember HiC has limited resolution (4k?, 2k?, 1k?), so you shouldn't use
 too low contigs anyway
+
+- consider merging paired reads, but check first how many reads overlap!
 """
 epilog="""Author: l.p.pryszcz+git@gmail.com
 Bratislava, 25/10/2016
@@ -182,9 +184,10 @@ def get_shuffled(d, bin_chr, bin_position, seed=0):
     inv_perm = np.argsort(perm)
     return d[perm, :][:, perm], bin_chr[perm], bin_position[perm]            
 
-def get_clusters(outbase, infile, t, contig2size, bin_chr):
+def get_clusters(outbase, t, contig2size, bin_chr):
     """Return clusters from tree"""
     # generate clusters
+    logger(" Generating clusters from %s windows..."%len(t))
     subtrees=[]
     while len(t)>2:
         n, dist = t.get_farthest_leaf()
@@ -198,7 +201,7 @@ def get_clusters(outbase, infile, t, contig2size, bin_chr):
         p = n.get_ancestors()[ai+1]
         p.remove_child(a)
 
-    #logger("Assigning contigs to %s clusters..."%len(subtrees))
+    logger(" Assigning contigs to %s clusters..."%len(subtrees))
     total = correct = 0
     contig2cluster = {get_name(c): Counter() for c in np.unique(bin_chr)}
     for i, subtree in enumerate(subtrees, 1):
@@ -209,9 +212,9 @@ def get_clusters(outbase, infile, t, contig2size, bin_chr):
         for k, v in c.iteritems():
             if not k: continue
             contig2cluster[get_name(k)][i] += v
-    #print " %s / %s [%.2f%s]"%(correct, total, 100.*correct/total, '%')
+    logger("  %s / %s [%.2f%s]"%(correct, total, 100.*correct/total, '%'))
 
-    #logger("Weak assignments...")
+    logger(" Weak assignments...")
     clusters = [[] for i in range(len(subtree))]
     withoutCluster, weakCluster = [], []
     for c, counter in contig2cluster.iteritems():
@@ -224,12 +227,12 @@ def get_clusters(outbase, infile, t, contig2size, bin_chr):
         clusters[clusteri].append(c)
         if mfrac<.66:
             weakCluster.append(c)
-    #print "  %s bp in %s contigs without assignment."%(sum(contig2size[c] for c in withoutCluster), len(withoutCluster))
-    #print "  %s bp in %s contigs having weak assignment."%(sum(contig2size[c] for c in weakCluster), len(weakCluster))
+    logger("  %s bp in %s contigs without assignment."%(sum(contig2size[c] for c in withoutCluster), len(withoutCluster)))
+    logger("  %s bp in %s contigs having weak assignment."%(sum(contig2size[c] for c in weakCluster), len(weakCluster)))
 
     clusters = filter(lambda x: x, clusters)
     outfile = outbase+".clusters.tab"
-    logger("Reporting clusters to: %s ..."%outfile)
+    logger(" Reporting clusters to: %s ..."%outfile)
     totsize = 0
     with open(outfile, "w") as out:
         for i, cluster in enumerate(clusters, 1):
@@ -237,7 +240,7 @@ def get_clusters(outbase, infile, t, contig2size, bin_chr):
             totsize += clSize
             #print " %s %s bp in %s contigs" % (i, clSize, len(cluster))
             out.write("\t".join(cluster)+"\n")
-    logger(" %3s bp in %s clusters."%(totsize, len(clusters)))
+    logger("  %3s bp in %s clusters."%(totsize, len(clusters)))
     return clusters
 
 def get_reversed(scaffold):
@@ -374,7 +377,7 @@ def clusters2scaffolds(clusters, infile, minWindows, prev_scaffolds):
         scaffolds.append(scaffold)
     return scaffolds
             
-def report_scaffolds(outbase, infile, scaffolds, faidx, w=60):
+def report_scaffolds(outbase, scaffolds, faidx, w=60):
     """Save scaffolds"""
     totsize = 0
     fastafn = outbase+".scaffolds.fa"
@@ -421,7 +424,7 @@ def array2scaffolds(outbase, infile, infile2, fasta, threads, minWindows, scaffo
     del d
 
     logger("Assigning contigs to clusters/scaffolds...") 
-    clusters = get_clusters(outbase, infile, t, contig2size, bin_chr)
+    clusters = get_clusters(outbase, t, contig2size, bin_chr)
 
     logger("Constructing scaffolds...")
     if threads > 1: 
@@ -446,7 +449,7 @@ def main():
                         help="Contact matrix (.npz) used for chromosome assignment")
     parser.add_argument("-j", "--infile2", default='', 
                         help="Contact matrix (.npz) used for scaffolding [-i/--infile]")
-    parser.add_argument("-o", "--outbase", default='', 
+    parser.add_argument("-o", "--outdir", default='', 
                         help="Output file base name [-i/--infile]")
     parser.add_argument("-f", "--fasta", required=True, type=file,
                         help="Contigs FastA file")
@@ -459,23 +462,31 @@ def main():
     if o.verbose:
         sys.stderr.write("Options: %s\n"%str(o))
 
-    infile = infile2 = outbase = o.infile
+    # use infile as outdir
+    infile = infile2 = outdir = o.infile
     if o.infile2:
         infile2 = o.infile2
-    if o.outbase:
-        outbase = o.outbase
-
+    if o.outdir:
+        outdir = o.outdir
+        
+    # create outdir
+    if os.path.isdir(outdir):
+        sys.stderr.write("Output directory exists: %s !\n"%outdir)
+        sys.exit(1)
+    else:
+        os.makedirs(outdir)
+            
     if o.minWindows<2:
         sys.stderr.write("[ERROR] -m/--minWindows has to be greater than 1!\n")
         sys.exit(1)
 
     # first iteration
     #logger("====== 1st ITERATION ======")
-    scaffolds, fastafn = array2scaffolds(outbase, infile, infile2, o.fasta, o.threads, o.minWindows)
+    scaffolds, fastafn = array2scaffolds(outdir, infile, infile2, o.fasta, o.threads, o.minWindows)
 
     # second iteration
     #logger("====== 2nd ITERATION ======")
-    #scaffolds, fastafn = array2scaffolds(outbase+".iter2", infile, infile, fastafn, o.threads, o.minWindows, scaffolds)    
+    #scaffolds, fastafn = array2scaffolds(outdir+".iter2", infile, infile, fastafn, o.threads, o.minWindows, scaffolds)    
     
 if __name__=="__main__":
     t0 = datetime.now()

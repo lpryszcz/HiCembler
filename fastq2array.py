@@ -20,42 +20,47 @@ def logger(message, log=sys.stdout):
     memory = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
     log.write("[%s] %s    [memory: %6i Mb]\n"%(datetime.ctime(datetime.now()), message, memory))
 
-def fasta2windows(fasta, windowSize, verbose):
+def fasta2windows(fasta, windowSize, verbose, skipShorter=1, minSize=2000,
+                  contigs=[], check=1, filterwindows=1):
     """Generate windows over chromosomes"""
+    # init fasta index
+    faidx = FastaIndex(fasta)
     # make sure no spaces in FastA
-    fn = fasta.name
-    grepout = commands.getoutput('grep ">" %s | grep -m1 " "'%fn)
-    if grepout:
+    if faidx.whitespaces_in_headers:
+        fn = fasta.name
         logger("Removing spaces from FastA...")
         os.system('mv %s %s.bck && cut -f1 -d" " %s.bck > %s'%(fn, fn, fn, fn))
+        # reload fasta index
+        faidx = FastaIndex(fasta)
     # 
     if verbose:
         logger("Parsing FastA file...")
-    # init fasta index
-    faidx = FastaIndex(fasta)
     # filter windows so they are smaller than largest chr and withing reasonalbe range toward genome size
-    maxchrlen = max(faidx.id2stats[c][0] for c in faidx)
-    windowSize = filter(lambda x: 1000*x<maxchrlen and 1000*x<0.01*faidx.genomeSize and 1000*x>0.000001*faidx.genomeSize, windowSize)
-    if verbose:
-        logger(" selected %s windows [kb]: %s"%(len(windowSize), str(windowSize)))
+    if filterwindows:    
+        maxchrlen = max(faidx.id2stats[c][0] for c in faidx)
+        windowSize = filter(lambda x: 1000*x<maxchrlen and 1000*x<0.01*faidx.genomeSize and 1000*x>0.000001*faidx.genomeSize, windowSize)
+        if verbose:
+            logger(" selected %s windows [kb]: %s"%(len(windowSize), str(windowSize)))
     windowSize = [w*1000 for w in windowSize]
     # generate windows
     windows, chr2window = [[] for w in windowSize], [{} for w in windowSize]
     genomeSize = 0
     base2chr = {}
     skipped = []
-    for i, c in enumerate(faidx, 1): #.sort(minLength=minLength)
+    for i, c in enumerate(faidx, 1): 
+        if contigs and c not in contigs:
+            continue
         if i%1e5 == 1:
             sys.stderr.write(' %s   \r'%i)
         # get windows
         size = faidx.id2stats[c][0]
         # skip short contigs    
-        if size < min(windowSize):
+        if skipShorter and size < min(windowSize) or size<minSize:
             skipped.append(size)
             continue
         for i in range(len(windowSize)):
             # skip contig if shorter than given window
-            if size < windowSize[i]:
+            if skipShorter and size < windowSize[i]:
                 #print size, "skipped %s"%windowSize[i]
                 continue
             # get starting window
@@ -63,16 +68,17 @@ def fasta2windows(fasta, windowSize, verbose):
             for start in range(0, size, windowSize[i]):
                 windows[i].append((c, start, start+windowSize[i]))
             # update last entry end
-            # windows[i][-1] = (c, start, size)
+            if not skipShorter:
+                windows[i][-1] = (c, start, size)
         # get chromosome tick in the middle    
         base2chr[genomeSize+size/2] = c
         # update genomeSize
         genomeSize += size
-    print [len(w) for w in windows]
+    # print [len(w) for w in windows]
     if verbose:
         logger(' %s bases in %s contigs divided in %s-%s windows. '%(faidx.genomeSize, len(faidx), len(windows[0]), len(windows[-1])))
         if skipped:
-            logger('  %s bases in %s contigs <%sbp skipped.'%(sum(skipped), len(skipped), min(windowSize)))
+            logger('  %s bases in %s contigs skipped.'%(sum(skipped), len(skipped)))
     return windowSize, windows, chr2window, base2chr, faidx.genomeSize
         
 def _get_snap_proc(fn1, fn2, ref, cores, verbose, log=sys.stderr, largemem=0):
@@ -124,7 +130,7 @@ def parse_sam(handle):
         if q1 == q2:
             yield q1, flag1, ref1, start1, mapq1, len1, q2, flag2, ref2, start2, mapq2, len2
 
-def get_window(chrom, start, length, flag, windowSize, chr2window):
+def get_window0(chrom, start, length, flag, windowSize, chr2window):
     """Return window alignment belongs to. """
     if flag & 16:
         end = start
@@ -136,7 +142,16 @@ def get_window(chrom, start, length, flag, windowSize, chr2window):
     # get window
     window = pos / windowSize + chr2window[chrom]
     return window
-
+    
+def get_window(chrom, start, length, windowSize, chr2window):
+    """Return window alignment belongs to. """
+    end = start + length
+    # get middle position
+    pos = int(start+round((end-start)/2))
+    # get window
+    window = pos / windowSize + chr2window[chrom]
+    return window
+    
 def sam2array(a, windowSize, chr2window, outfn, fq1, fq2, ref, cores, mapq, upto, verbose):
     """Process SAM entries and add them to contact array."""
     """Sort contigs starting from the longest and remove too short"""
@@ -161,8 +176,8 @@ def sam2array(a, windowSize, chr2window, outfn, fq1, fq2, ref, cores, mapq, upto
             continue
         # get windows
         for ii in range(len(windowSize)):
-            w1 = get_window(ref1, start1, len1, flag1, windowSize[ii], chr2window[ii])
-            w2 = get_window(ref2, start2, len2, flag2, windowSize[ii], chr2window[ii])
+            w1 = get_window(ref1, start1, len1, windowSize[ii], chr2window[ii])
+            w2 = get_window(ref2, start2, len2, windowSize[ii], chr2window[ii])
             # matrix is symmetrix, so make sure to add only to one part
             if w2 < w1:
                 w1, w2 = w2, w1
@@ -229,13 +244,13 @@ def fastq2array(fasta, fastq, outfn, windowSize, mapq=10, cores=1,
     # save
     if verbose:
         logger("Saving & plotting...")
-    for a, _windowSize,_windows in zip(arrays, windowSize, windows):
+    for a, _windowSize, _windows in zip(arrays, windowSize, windows):
         _outfn = outfn + ".%sk"%(_windowSize/1000,)
         if verbose:
             logger(" %s"%_outfn)        
         # save windows
         with gzip.open(_outfn+".windows.tab.gz", "w") as out:
-            out.write("\n".join("\t".join(map(str, w)) for w in _windows)+"\n")    
+            out.write("\n".join("\t".join(map(str, w)) for w in _windows)+"\n")
 
         #save normalised
         with open(_outfn+".npz", "w") as out:
@@ -308,3 +323,4 @@ if __name__=='__main__':
     #    sys.stderr.write("I/O error({0}): {1}\n".format(e.errno, e.strerror))
     dt = datetime.now()-t0
     sys.stderr.write("#Time elapsed: %s\n"%dt)
+    
