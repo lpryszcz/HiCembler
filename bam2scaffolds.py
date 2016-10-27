@@ -77,7 +77,7 @@ def load_clusters(fnames):
         windowSize.append(w)
     return clusters, windowSize
     
-def get_clusters(bam, fasta, outdir, windowSize, mapq, dpi, upto, verbose):
+def bam2clusters(bam, fasta, outdir, windowSize, mapq, dpi, upto, verbose):
     """Return clusters computed from from windowSizes"""
     clusters = []
     # load clusters
@@ -99,18 +99,14 @@ def get_clusters(bam, fasta, outdir, windowSize, mapq, dpi, upto, verbose):
     for d, _windowSize, _windows in zip(arrays, windowSize, windows):
         outfn = outdir + "/%sk"%(_windowSize/1000,)
         logger("=== %sk windows ==="%(_windowSize/1000,))
-        '''# save windows, array and plot
-        logger("Saving & plotting...")
+        
+        # save windows, array and plot
+        logger("Saving array...")
         with gzip.open(outfn+".windows.tab.gz", "w") as out:
             out.write("\n".join("\t".join(map(str, w)) for w in _windows)+"\n")
         with open(outfn+".npz", "w") as out:
             np.savez_compressed(out, d)
-        if len(windows)<2e4:
-            plot(outfn, a, genomeSize, base2chr, _windowSize, dpi)
-        elif verbose:
-            sys.stderr.write("[WARNING] Very large matrix (%s x %s). Skipped plotting!\n"%(len(windows), len(windows)))
-        #'''
-        
+
         # make symmetric & normalise
         d += d.T
         d -= np.diag(d.diagonal()/2)
@@ -128,7 +124,6 @@ def get_clusters(bam, fasta, outdir, windowSize, mapq, dpi, upto, verbose):
         names = ["%s %7sk"%(get_name(c), s/1000) for c, (s, e) in zip(bin_chr, bin_position)]
         d = transform(d)
         t = array2tree(d, names, outfn)
-        del d
 
         logger("Assigning contigs to clusters/scaffolds...")
         _clusters = get_clusters(outfn, t, contig2size, bin_chr)
@@ -189,7 +184,7 @@ def bam2scaffolds(bam, fasta, outdir, windowSize, windowSize2, mapq, threads, dp
     faidx = FastaIndex(fasta)
 
     # calculate clusters for various window size
-    clusters, _windowSize = get_clusters(bam, fasta, outdir, windowSize, mapq, dpi, upto, verbose)
+    clusters, _windowSize = bam2clusters(bam, fasta, outdir, windowSize, mapq, dpi, upto, verbose)
 
     # use preselected window size
     if len(windowSize)==1 and windowSize[0]*1000 in _windowSize:
