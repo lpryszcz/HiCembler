@@ -12,8 +12,6 @@ ignoring iter-scaffold contacts
 
 - remember HiC has limited resolution (4k?, 2k?, 1k?), so you shouldn't use
 too low contigs anyway
-
-- to get orientation, don't use only last window, but half of the scaffold, try diagonal! 
 """
 epilog="""Author: l.p.pryszcz+git@gmail.com
 Bratislava, 25/10/2016
@@ -270,16 +268,16 @@ def join_scaffolds(scaffold1, scaffold2, d, contig2indices, minWindows=3):
     # get orientation: 0: s-s; 1: s-e; 2: e-s; 3: e-e
     ## contact values for ends of two contigs are compared
     ## and the max value is taken as true contact
-    ### this may be replaced by some ML function, as comparing only 1 window may be misleading!
+    ### this should be accurate, but you may consider some ML function
     n1, n2 = len(indices1), len(indices2)
     # compare diagonals of contact matrix
     i = n2/2
     dflip = np.fliplr(_d[:n1,n2:])
     d1, d2, d3, d4 = np.diag(_d, k=n1), np.diag(dflip), np.diag(dflip, k=n2-n1), np.diag(_d, k=n2)
-    orientation = np.argmax(map(sum, (d1[:i], d2[:i], d3[-i:], d2[-i:])))
+    orientation = np.argmax(map(sum, (d1[:i], d2[:i], d3[-i:], d4[-i:])))
     # s - s
     if   orientation == 0:
-        scaffold = get_reversed(scaffold1) + scaffold2 # get_reversed(scaffold2) + scaffold1 will be slightly faster
+        scaffold = get_reversed(scaffold1) + scaffold2
     # s - e
     elif orientation == 1:
         scaffold = scaffold2 + scaffold1
