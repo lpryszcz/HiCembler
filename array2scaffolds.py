@@ -13,7 +13,7 @@ ignoring iter-scaffold contacts
 - remember HiC has limited resolution (4k?, 2k?, 1k?), so you shouldn't use
 too low contigs anyway
 
-- to get orientation, don't use only last window, but half of the scaffold! 
+- to get orientation, don't use only last window, but half of the scaffold, try diagonal! 
 """
 epilog="""Author: l.p.pryszcz+git@gmail.com
 Bratislava, 25/10/2016
@@ -268,14 +268,18 @@ def join_scaffolds(scaffold1, scaffold2, d, contig2indices, minWindows=3):
     # get subset of array for scaffold1 and scaffold2
     _d = d[:, indices1+indices2][indices1+indices2, :]
     # get orientation: 0: s-s; 1: s-e; 2: e-s; 3: e-e
-    ## contact values for start and end of two contigs are compared
+    ## contact values for ends of two contigs are compared
     ## and the max value is taken as true contact
-    ## this may be replaced by some ML function, as comparing only 1 window may be misleading!
-    n1 = len(indices1)
-    orientation = np.argmax(_d[:, [n1, -1]][[0, n1-1],:])
+    ### this may be replaced by some ML function, as comparing only 1 window may be misleading!
+    n1, n2 = len(indices1), len(indices2)
+    # compare diagonals of contact matrix
+    i = n2/2
+    dflip = np.fliplr(_d[:n1,n2:])
+    d1, d2, d3, d4 = np.diag(_d, k=n1), np.diag(dflip), np.diag(dflip, k=n2-n1), np.diag(_d, k=n2)
+    orientation = np.argmax(map(sum, (d1[:i], d2[:i], d3[-i:], d2[-i:])))
     # s - s
     if   orientation == 0:
-        scaffold = get_reversed(scaffold1) + scaffold2
+        scaffold = get_reversed(scaffold1) + scaffold2 # get_reversed(scaffold2) + scaffold1 will be slightly faster
     # s - e
     elif orientation == 1:
         scaffold = scaffold2 + scaffold1
@@ -449,7 +453,7 @@ def main():
     parser.add_argument("-f", "--fasta", required=True, type=file,
                         help="Contigs FastA file")
     parser.add_argument("-m", "--minWindows", default=3, type=int,
-                        help="minimum number of windows per contigs [%(default)s]")
+                        help="minimum number of windows per contig, has to be >1 [%(default)s]")
     parser.add_argument("-t", "--threads", default=4, type=int,
                         help="no. of processes to use [%(default)s]")
 
@@ -462,6 +466,10 @@ def main():
         infile2 = o.infile2
     if o.outbase:
         outbase = o.outbase
+
+    if o.minWindows<2:
+        sys.stderr.write("[ERROR] -m/--minWindows has to be greater than 1!\n")
+        sys.exit(1)
 
     # first iteration
     #logger("====== 1st ITERATION ======")
