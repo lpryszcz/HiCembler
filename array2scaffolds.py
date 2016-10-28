@@ -31,13 +31,13 @@ from FastaIndex import FastaIndex
 transform = lambda x: np.log(np.max(x+1))-np.log(x+1)
 
 def normalize_rows(a):
-    """Normalise rows of give array."""
+    """Normalise rows so the sums among rows are identical."""
     rows, cols = a.shape
     maxv = a.sum(axis=0).max()
     for i in xrange(rows):
         # only if any signal
         if a[i].max():
-            a[i] *= maxv/a[i].sum()
+            a[i] *= 1.*maxv/a[i].sum()
     return a
 
 def get_contig2size(bin_chr, bin_position):
@@ -144,7 +144,20 @@ def distance_matrix2tree(Z, names):
         i2n[n+idx] = t
         idx += 1
     return t
-        
+
+def getNewick(node, newick, parentdist, leaf_names):
+    if node.is_leaf():
+        return "%s:%.2f%s" % (leaf_names[node.id], parentdist - node.dist, newick)
+    else:
+        if len(newick) > 0:
+            newick = "):%.2f%s" % (parentdist - node.dist, newick)
+        else:
+            newick = ");"
+        newick = getNewick(node.get_left(), newick, node.dist, leaf_names)
+        newick = getNewick(node.get_right(), ",%s" % (newick), node.dist, leaf_names)
+        newick = "(%s" % (newick)
+        return newick
+  
 def array2tree(d, names, outbase="", method="ward"):
     """Return tree representation for array"""
     # cluster
