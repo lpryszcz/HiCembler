@@ -22,20 +22,30 @@ def truncate(t, mind=3, maxd=0):
 def get_names(bin_chr, bin_position):
     return ["%s %s"%(c, s) for c, (s, e) in zip(bin_chr, bin_position)]
 
-def main2(fn, method="ward", nchrom=1000, distfrac=0.75): #ward average
-
+def get_longest(t, maxdist=6):
+    """Return node having longest branch"""
+    #n = sorted(t.traverse(), key=lambda n: 2*n.dist-t.get_distance(n), reverse=1)[0]
+    n = t
+    bestdist = 2*n.dist-n.get_distance(t)
+    for _n in t.traverse():
+        if _n.get_distance(t, topology_only=1) > maxdist:
+            break
+        if 2*_n.dist-_n.get_distance(t) > bestdist:
+            n = _n
+            bestdist = 2*_n.dist-_n.get_distance(t)
+    return n
+    
+def get_subtrees(d, bin_chr, bin_position, method="ward", nchrom=1000, distfrac=0.75):
     maxtdist = 0
-    d, bin_chr, bin_position, contig2size = load_matrix(fn)
-    d = transform(d)
     i = 0
-    clusters = []
+    subtrees = []
     for i in range(1, nchrom):
     
         Z = sch.linkage(d[np.triu_indices(d.shape[0], 1)], method=method)
         
         tree = sch.to_tree(Z, False)
         names = get_names(bin_chr, bin_position)
-        nw = getNewick(tree, "", tree.dist, names)    
+        nw = getNewick(tree, "", tree.dist, names)
         t = ete3.Tree(nw)
     
         tname, tdist = t.get_farthest_leaf()#[1]
@@ -45,89 +55,74 @@ def main2(fn, method="ward", nchrom=1000, distfrac=0.75): #ward average
         if tdist < maxtdist*distfrac:
             break
           
-        print i, len(t), tname.name, tdist, get_chromosome(t.get_leaf_names())        
         # get longest branch
-        dists = sorted((n.dist for n in t.traverse()), reverse=1)
-        # 
-        n = sorted(t.traverse(), key=lambda n: 2*n.dist-t.get_distance(n), reverse=1)[0]
-        print " %s %s pruned; %s; %s"%(len(n), n.dist, get_chromosome(n.get_leaf_names()), dists[:10])
-
+        n = get_longest(t)
         pruned = n.get_leaf_names()         
-        #'''
+        subtrees.append(pruned)
         # prune array        
         indices = [_i for _i, name in enumerate(names) if name not in set(pruned)]
         d = d[indices, :]
         d = d[:, indices]
         bin_chr = bin_chr[indices]
         bin_position = bin_position[indices, :]
-
-        t2 = truncate(ete3.Tree(t.write())); t2.render("%s.pdf"%i)
-        clusters.append(pruned)
             
     if i:    
-      # remove last subcluster from tree
-      clusters.append(t.get_leaf_names())
-      #t.get_ancestors()[0].remove_child(n); 
-      t = truncate(t); t.render("%s.pdf"%i)
+        subtrees.append(t.get_leaf_names())
+    return subtrees
     
-    print "Reporting %s clusters..."%len(clusters)
-    for i, cluster in enumerate(clusters, 1):
-        print " cluster_%s %s windows; %s"%(i, len(cluster), Counter(get_chromosome(cluster)))
 
-
-def main(fn, method="ward", nchrom=1000, distfrac=0.75): #ward average
-
-    maxtdist = 80
-    d, bin_chr, bin_position, contig2size = load_matrix(fn)
+def main(fn):
+    d, bin_chr, bin_position, contig2size = load_matrix(fn, remove_shorter=0)
     d = transform(d)
-
-    Z = sch.linkage(d[np.triu_indices(d.shape[0], 1)], method=method)
+    subtrees = get_subtrees(d, bin_chr, bin_position)
     
-    tree = sch.to_tree(Z, False)
-    names = get_names(bin_chr, bin_position)
-    nw = getNewick(tree, "", tree.dist, names)    
-    t = ete3.Tree(nw)
-    maxtdist = t.get_farthest_leaf()[1]
+    logger(" Assigning contigs to %s clusters..."%len(subtrees))
+    total = correct = 0
+    contig2cluster = {get_name(c): Counter() for c in np.unique(bin_chr)}
+    for i, subtree in enumerate(subtrees, 1):
+        c = Counter(map(get_name, subtree))
+        total += len(subtree)
+        correct += c.most_common(1)[0][1]
+        # poplate contig2clustre
+        for k, v in c.iteritems():
+            if not k: continue
+            contig2cluster[get_name(k)][i] += v
+    logger("  %s / %s [%.2f%s]"%(correct, total, 100.*correct/total, '%'))
 
-    i = 0
-    clusters = []
-    for i in range(1, nchrom):
-        tname, tdist = t.get_farthest_leaf()#[1]
-        # break if small subtree
-        if tdist < maxtdist*distfrac:
-            break
-          
-        print i, len(t), tname.name, tdist, get_chromosome(t.get_leaf_names())        
-        # get longest branch
-        dists = sorted((n.dist for n in t.traverse()), reverse=1)
-        # 
-        n = sorted(t.traverse(), key=lambda n: 2*n.dist-t.get_distance(n), reverse=1)[0]
-        print " %s %s pruned; %s; %s"%(len(n), n.dist, get_chromosome(n.get_leaf_names()), dists[:10])
-
-        pruned = n.get_leaf_names()         
-
-        t2 = truncate(ete3.Tree(t.write())); t2.render("%s.pdf"%i)
-        # pruning is slower than recalculating the tree!! 18vs11s or 44 vs 69s
-        t.prune([_n for _n in t.get_leaf_names() if _n not in set(pruned)], preserve_branch_length=1)
-        #n.get_ancestors()[0].remove_child(n); n.delete()
-        clusters.append(pruned)
-            
-    if i:    
-      # remove last subcluster from tree
-      clusters.append(t.get_leaf_names())
-      #t.get_ancestors()[0].remove_child(n); 
-      t = truncate(t); t.render("%s.pdf"%i)
-    
-    print "Reporting %s clusters..."%len(clusters)
-    for i, cluster in enumerate(clusters, 1):
-        print " cluster_%s %s windows; %s"%(i, len(cluster), Counter(get_chromosome(cluster)))
-
+    logger(" Weak assignments...")
+    clusters = [[] for i in range(len(subtree))]
+    withoutCluster, weakCluster = [], []
+    for c, counter in contig2cluster.iteritems():
+        if not counter:
+            withoutCluster.append(c)
+            continue
+        # get major cluster
+        clusteri, count = counter.most_common(1)[0]
+        mfrac = 1. * count / sum(counter.itervalues())
+        clusters[clusteri].append(c)
+        if mfrac<.66:
+            weakCluster.append(c)
+    logger("  %s bp in %s contigs without assignment."%(sum(contig2size[c] for c in withoutCluster), len(withoutCluster)))
+    logger("  %s bp in %s contigs having weak assignment."%(sum(contig2size[c] for c in weakCluster), len(weakCluster)))
+      
+    outfile = fn[:-4]+".clusters.tab"
+    clusters = filter(lambda x: x, clusters)
+    totsize = 0
+    logger("Reporting %s clusters to %s ..."%(len(clusters), outfile))
+    with open(outfile, "w") as out:
+        for i, cluster in enumerate(clusters, 1):
+            #print " cluster_%s %s windows; %s"%(i, len(cluster), Counter(get_chromosome(cluster).most_common(3)))
+            clSize = sum(contig2size[c] for c in cluster)
+            totsize += clSize
+            out.write("\t".join(cluster)+"\n")
+    logger("  %3s bp in %s clusters."%(totsize, len(clusters)))
+        
 if __name__=="__main__":
     t0 = datetime.now()
     fn = '/home/lpryszcz/cluster/hic/arath/_archives/snap/SRR2626163.100k.npz'
     if len(sys.argv)>1:
       fn = sys.argv[1]
-    main2(fn)
+    main(fn)
     dt = datetime.now()-t0
     sys.stderr.write("#Time elapsed: %s\n"%dt)
 
