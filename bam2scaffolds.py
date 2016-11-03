@@ -4,9 +4,6 @@ desc="""Report scaffolds by joining contigs based on contact matrix from BAM fil
 TBD:
 - allow for fitting contig into gap within large contig?
 - distance estimation?
-- new method for dividing into scaffolds
- - how to 
-- add SAM support
 """
 epilog="""Author: l.p.pryszcz+git@gmail.com
 Bratislava, 27/10/2016
@@ -99,11 +96,12 @@ def get_subtrees(d, bin_chr, bin_position, method="ward", nchrom=1000, distfrac=
     i = 0
     subtrees = []
     for i in range(1, nchrom):
-        Z = sch.linkage(d[np.triu_indices(d.shape[0], 1)], method=method)
-        tree = sch.to_tree(Z, False)
         names = ["%s %s"%(c, s) for c, (s, e) in zip(bin_chr, bin_position)]
-        t = ete3.Tree(getNewick(tree, "", tree.dist, names))
-    
+        #Z = sch.linkage(d[np.triu_indices(d.shape[0], 1)], method=method)
+        #tree = sch.to_tree(Z, False)
+        #t = ete3.Tree(getNewick(tree, "", tree.dist, names))
+        t = array2tree(d, names, method=method)
+        
         tname, tdist = t.get_farthest_leaf()#[1]
         if maxtdist < tdist:
             maxtdist = t.get_farthest_leaf()[1]
@@ -188,9 +186,9 @@ def bam2clusters(bam, fasta, outdir, windowSize, mapq, dpi, upto, verbose):
     
     # get array from bam
     logger("Parsing BAM...")
-    #arrays = [np.zeros((len(w), len(w)), dtype="float32") for w in windows]
-    #arrays = bam2array(arrays, windowSize, chr2window, bam,  mapq, upto)
-    npy = np.load(os.path.join(outdir,"100k.npz")); arrays = [npy[npy.files[0]], ]
+    arrays = [np.zeros((len(w), len(w)), dtype="float32") for w in windows]
+    arrays = bam2array(arrays, windowSize, chr2window, bam,  mapq, upto)
+    #npy = np.load(os.path.join(outdir,"100k.npz")); arrays = [npy[npy.files[0]], ]
     
     faidx = FastaIndex(fasta)
     contig2size = {c: stats[0] for c, stats in faidx.id2stats.iteritems()}
@@ -218,13 +216,6 @@ def bam2clusters(bam, fasta, outdir, windowSize, mapq, dpi, upto, verbose):
         bin_chr = np.array(bin_chr)
         bin_position = np.array(bin_position)
 
-        '''logger("Calculating linkage matrix & tree...")
-        names = ["%s %7sk"%(get_name(c), s/1000) for c, (s, e) in zip(bin_chr, bin_position)]
-        d = transform(d)
-        t = array2tree(d, names, outfn)
-
-        logger("Assigning contigs to clusters/scaffolds...")
-        _clusters = get_clusters(outfn, t, contig2size, bin_chr)'''
         logger("Assigning contigs to clusters/scaffolds...")
         _clusters = get_clusters(outfn, d, contig2size, bin_chr, bin_position)
         clusters.append(_clusters)
@@ -235,7 +226,7 @@ def contigs2scaffold(args):
     i, bam, fasta, windowSize, contigs, mapq, minWindows = args
     # get array from bam
     # get windows
-    data = fasta2windows(fasta, windowSize, verbose=0, skipShorter=0, contigs=set(contigs), filterwindows=0)
+    data = fasta2windows(fasta, windowSize, verbose=0, skipShorter=1, contigs=set(contigs), filterwindows=0)
     windowSize, windows, chr2window, base2chr, genomeSize = data
 
     #logger("  Parsing BAM...")
@@ -268,15 +259,18 @@ def get_scaffolds(bam, fasta, clusters, mapq, minWindows, threads, verbose, wind
     scaffolds = []
     faidx = FastaIndex(fasta)
     contig2size = {c: stats[0] for c, stats in faidx.id2stats.iteritems()}
-    if threads>1:
-        p = Pool(threads)
-        iterable = [(i, bam, fasta, windowSize, contigs, mapq, minWindows) for i, contigs in enumerate(clusters, 1)]
-        for scaffold in p.imap(contigs2scaffold, iterable):
-            scaffolds.append(scaffold)
-    else:
-        for i, contigs in enumerate(clusters, 1):
-            scaffold = contigs2scaffold([i, bam, fasta, windowSize, contigs, mapq, minWindows])
-            scaffolds.append(scaffold)
+    for _windowSize in windowSize:
+        logger(" %sk..."%_windowSize)  
+        scaffolds.append([])
+        if threads>1:
+            p = Pool(threads)
+            iterable = [(i, bam, fasta, [_windowSize], contigs, mapq, minWindows) for i, contigs in enumerate(clusters, 1)]
+            for scaffold in p.imap(contigs2scaffold, iterable):
+                scaffolds[:-1].append(scaffold)
+        else:
+            for i, contigs in enumerate(clusters, 1):
+                scaffold = contigs2scaffold([i, bam, fasta, [_windowSize], contigs, mapq, minWindows])
+                scaffolds[:-1].append(scaffold)
     return scaffolds
     
 def bam2scaffolds(bam, fasta, outdir, windowSize, windowSize2, mapq, threads, dpi, upto, minWindows, verbose):
@@ -298,11 +292,12 @@ def bam2scaffolds(bam, fasta, outdir, windowSize, windowSize2, mapq, threads, dp
     logger("Selected %s clusters from window %sk"%(len(_clusters), _windowSize/1000))
 
     logger("Constructing scaffolds...")
-    scaffolds = get_scaffolds(bam, fasta.name, _clusters, mapq, minWindows, threads, verbose, [windowSize2])
+    scaffolds = get_scaffolds(bam, fasta.name, _clusters, mapq, minWindows, threads, verbose, windowSize2)
     
     logger("Reporting %s scaffolds..."%len(scaffolds))
-    outbase = outdir+"/%sk.%sk"%(_windowSize/1000, windowSize2)
-    fastafn = report_scaffolds(outbase, scaffolds, faidx)
+    for _windowSize2, _scaffolds in zip(windowSize2, scaffolds):
+        outbase = outdir+"/%sk.%sk"%(_windowSize/1000, _windowSize2)
+        fastafn = report_scaffolds(outbase, scaffolds, faidx)
     
     logger("Done!")
 
@@ -319,7 +314,7 @@ def main():
     parser.add_argument("-o", "--outdir", required=1, help="output name")
     parser.add_argument("-w", "--windowSize", nargs="+", default=[100, 50, 20, 10], type=int,
                         help="window size in kb [%(default)s]")
-    parser.add_argument("-z", "--windowSize2", default=10, type=int,
+    parser.add_argument("-z", "--windowSize2", default=[10, 20], type=int, nargs="+", 
                         help="window size in kb [%(default)s]")
     parser.add_argument("-m", "--mapq", default=10, type=int,
                         help="mapping quality [%(default)s]")

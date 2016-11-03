@@ -123,26 +123,25 @@ def load_matrix(fname, chrs=[], remove_shorter=True, scaffolds=[], verbose=0):
 def distance_matrix2tree(Z, names):
     """Return tree representation for distance matrix"""
     n = Z.shape[0]+1
-    i2n = {}
-    idx = 0
+    i2n = [0] * (2*n - 1)
     t = ete3.Tree()
-    for i, (idx1, idx2, dist, sample_count) in enumerate(Z, 1):
+    for i, (idx1, idx2, dist, sample_count) in enumerate(Z):
         idx1, idx2 = int(idx1), int(idx2)
         # create Tree object for tips / leaves
         if idx1 < n:
-            i2n[idx1] = ete3.Tree(name=names[idx1], dist=0)
+            i2n[idx1] = ete3.Tree(name=names[idx1])
         if idx2 < n:
-            i2n[idx2] = ete3.Tree(name=names[idx2], dist=0)
+            i2n[idx2] = ete3.Tree(name=names[idx2])
         # create new node
-        t = ete3.Tree(dist=0)
+        t = ete3.Tree()
         # normalise distance
-        dist -= max(i2n[idx1].get_farthest_leaf()[1], i2n[idx2].get_farthest_leaf()[1])
+        dist1 = dist - i2n[idx1].get_farthest_leaf()[1]
+        dist2 = dist - i2n[idx2].get_farthest_leaf()[1]
         # add children
-        t.add_child(i2n[idx1], dist=dist)
-        t.add_child(i2n[idx2], dist=dist)
+        t.add_child(i2n[idx1], dist=dist1)
+        t.add_child(i2n[idx2], dist=dist2)
         # store
-        i2n[n+idx] = t
-        idx += 1
+        i2n[n + i] = t
     return t
 
 def getNewick(node, newick, parentdist, leaf_names):
@@ -274,9 +273,11 @@ def get_indices(scaffold, contig2indices):
     
 def join_scaffolds(scaffold1, scaffold2, d, contig2indices, minWindows=3):
     """Join two adjacent scaffolds"""
-    indices1, indices2 = get_indices(scaffold1, contig2indices), get_indices(scaffold2, contig2indices)
+    indices1 = get_indices(scaffold1, contig2indices)
+    indices2 = get_indices(scaffold2, contig2indices)
     # skip contigs with less windows than minWindows
-    (scaffold1, indices1), (scaffold2, indices2) = sorted(((scaffold1, indices1), (scaffold2, indices2)), key=lambda x: len(x[1]), reverse=1)
+    if len(indices1) < len(indices2):
+        scaffold1, indices1, scaffold2, indices2 = scaffold2, indices2, scaffold1, indices1
     if len(indices2) < minWindows:
         return scaffold1
     # get subset of array for scaffold1 and scaffold2
@@ -293,7 +294,7 @@ def join_scaffolds(scaffold1, scaffold2, d, contig2indices, minWindows=3):
     orientation = np.argmax(map(sum, (d1[:i], d2[:i], d3[-i:], d4[-i:])))
     # s - s
     if   orientation == 0:
-        scaffold = get_reversed(scaffold1) + scaffold2
+        scaffold = get_reversed(scaffold2) + scaffold1 #get_reversed(scaffold1) + scaffold2
     # s - e
     elif orientation == 1:
         scaffold = scaffold2 + scaffold1
@@ -328,11 +329,8 @@ def tree2scaffold(t, d, bin_chr, bin_position, minWindows):
         n1, n2 = n.get_children()
         # and combine scaffolds
         n.scaffold = join_scaffolds(n1.scaffold, n2.scaffold, d, contig2indices, minWindows)
-        #print n.scaffold
 
     # estimate distances
-    
-        
     return t.scaffold
 
 def _func_reduce(A, keys, func, allkeys=None):
