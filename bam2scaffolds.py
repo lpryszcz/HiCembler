@@ -27,7 +27,7 @@ sys.path = paths + sys.path
 os.environ["PATH"] = "%s:%s"%(':'.join(paths), os.environ["PATH"])
 
 from sinkhorn_knopp import sinkhorn_knopp
-sk = sinkhorn_knopp.SinkhornKnopp(max_iter=100000, epsilon=0.00001)
+#sk = sinkhorn_knopp.SinkhornKnopp(max_iter=100000, epsilon=0.00001)
 
 def _get_samtools_proc(bam, mapq=0, regions=[], skipFlag=3980):
     """Return samtools subprocess"""
@@ -184,6 +184,7 @@ def get_clusters(outbase, d, contig2size, bin_chr, bin_position, method="ward", 
     
 def bam2clusters(bam, fasta, outdir, windowSize, mapq, dpi, upto, verbose):
     """Return clusters computed from from windowSizes"""
+    sk = sinkhorn_knopp.SinkhornKnopp()
     clusters = []
     # load clusters
     fnames = glob.glob(os.path.join(outdir, "*k.clusters.tab"))
@@ -236,6 +237,7 @@ def bam2clusters(bam, fasta, outdir, windowSize, mapq, dpi, upto, verbose):
 def contigs2scaffold(args):
     """Combine contigs into scaffold"""
     i, bam, fasta, windowSize, contigs, mapq, minWindows = args
+    sk = sinkhorn_knopp.SinkhornKnopp()
     # get array from bam
     # get windows
     data = fasta2windows(fasta, windowSize, verbose=0, skipShorter=1, contigs=set(contigs), filterwindows=0)
