@@ -1,6 +1,6 @@
 ### Table of Contents
 - **[HiCembler](#HiCembler)**  
-  - **[Prerequisites](#prerequisites)**  
+  - **[Installation](#Installation)**  
   - **[Running the pipeline](#running-the-pipeline)**  
     - **[Parameters](#parameters)**  
     - **[Test run](#test-run)**  
@@ -9,11 +9,21 @@
   
 # HiCembler
 
-
-
 This project was inspired by [DNA triangulation](https://github.com/NoamKaplan/dna-triangulation). 
 
-## Prerequisites
+## Installation
+On most Linux distros, the installation should be as easy as:
+```
+sudo -H pip install -U matplotlib numpy
+git clone --recursive https://github.com/lpryszcz/redundans.git
+cd HiCembler
+(cd bin/snap && make clean && make)
+```
+
+### Dependencies
+- `numpy` and `matplotlib` ie. `sudo -H pip install -U matplotlib numpy`
+- [SNAP aligner](https://github.com/amplab/snap)
+- [sinkhorn_knopp](https://github.com/btaba/sinkhorn_knopp)
 
 
 ## Running the pipeline

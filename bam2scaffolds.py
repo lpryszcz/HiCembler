@@ -19,6 +19,16 @@ from fastq2array import logger, fasta2windows, get_window, plot
 from array2scaffolds import transform, normalize_rows, get_name, get_clusters, array2tree, tree2scaffold, _average_reduce_2d, report_scaffolds, getNewick
 from FastaIndex import FastaIndex
 
+# update sys.path & environmental PATH
+root = os.path.dirname(os.path.abspath(sys.argv[0]))
+src = ["bin", "bin/snap", "bin/sinkhorn_knopp"]
+paths = [os.path.join(root, p) for p in src]
+sys.path = paths + sys.path
+os.environ["PATH"] = "%s:%s"%(':'.join(paths), os.environ["PATH"])
+
+from sinkhorn_knopp import sinkhorn_knopp
+sk = sinkhorn_knopp.SinkhornKnopp(max_iter=100000, epsilon=0.00001)
+
 def _get_samtools_proc(bam, mapq=0, regions=[], skipFlag=3980):
     """Return samtools subprocess"""
     # skip second in pair, unmapped, secondary, QC fails and supplementary algs
@@ -203,10 +213,12 @@ def bam2clusters(bam, fasta, outdir, windowSize, mapq, dpi, upto, verbose):
         with open(outfn+".npz", "w") as out:
             np.savez_compressed(out, d)
 
+        logger("Sinkhorn-Knopp normalisation...")
         # make symmetric & normalise
         d += d.T
         d -= np.diag(d.diagonal()/2)
-        d = normalize_rows(d)
+        #d = normalize_rows(d)
+        d = sk.fit(d)
 
         # generate missing handles
         bin_chr, bin_position = [], []
@@ -236,7 +248,8 @@ def contigs2scaffold(args):
     # make symmetric & normalise
     d += d.T
     d -= np.diag(d.diagonal()/2)
-    d = normalize_rows(d)
+    #d = normalize_rows(d)
+    d = sk.fit(d)
 
     logger(" cluster_%s with %s windows in %s contigs"%(i, d.shape[0], len(contigs)))
     # generate missing handles
@@ -254,23 +267,20 @@ def contigs2scaffold(args):
     scaffold = tree2scaffold(t, d, bin_chr, bin_position, minWindows)
     return scaffold
 
-def get_scaffolds(bam, fasta, clusters, mapq, minWindows, threads, verbose, windowSize=[10]):
+def get_scaffolds(bam, fasta, clusters, mapq, minWindows, threads, verbose, windowSize=10):
     """Return scaffolds"""
     scaffolds = []
     faidx = FastaIndex(fasta)
     contig2size = {c: stats[0] for c, stats in faidx.id2stats.iteritems()}
-    for _windowSize in windowSize:
-        logger(" %sk..."%_windowSize)  
-        scaffolds.append([])
-        if threads>1:
-            p = Pool(threads)
-            iterable = [(i, bam, fasta, [_windowSize], contigs, mapq, minWindows) for i, contigs in enumerate(clusters, 1)]
-            for scaffold in p.imap(contigs2scaffold, iterable):
-                scaffolds[:-1].append(scaffold)
-        else:
-            for i, contigs in enumerate(clusters, 1):
-                scaffold = contigs2scaffold([i, bam, fasta, [_windowSize], contigs, mapq, minWindows])
-                scaffolds[:-1].append(scaffold)
+    if threads>1:
+        p = Pool(threads)
+        iterable = [(i, bam, fasta, [windowSize], contigs, mapq, minWindows) for i, contigs in enumerate(clusters, 1)]
+        for scaffold in p.imap(contigs2scaffold, iterable):
+            scaffolds.append(scaffold)
+    else:
+        for i, contigs in enumerate(clusters, 1):
+            scaffold = contigs2scaffold([i, bam, fasta, [windowSize], contigs, mapq, minWindows])
+            scaffolds.append(scaffold)
     return scaffolds
     
 def bam2scaffolds(bam, fasta, outdir, windowSize, windowSize2, mapq, threads, dpi, upto, minWindows, verbose):
@@ -278,6 +288,7 @@ def bam2scaffolds(bam, fasta, outdir, windowSize, windowSize2, mapq, threads, dp
     faidx = FastaIndex(fasta)
 
     # calculate clusters for various window size
+    logger("=== Clustering ===")
     clusters, _windowSize = bam2clusters(bam, fasta, outdir, windowSize, mapq, dpi, upto, verbose)
 
     # use preselected window size
@@ -291,11 +302,12 @@ def bam2scaffolds(bam, fasta, outdir, windowSize, windowSize2, mapq, threads, dp
     _clusters, _windowSize = clusters[selected], _windowSize[selected]
     logger("Selected %s clusters from window %sk"%(len(_clusters), _windowSize/1000))
 
-    logger("Constructing scaffolds...")
-    scaffolds = get_scaffolds(bam, fasta.name, _clusters, mapq, minWindows, threads, verbose, windowSize2)
-    
-    logger("Reporting %s scaffolds..."%len(scaffolds))
-    for _windowSize2, _scaffolds in zip(windowSize2, scaffolds):
+    for _windowSize2 in windowSize2:
+        logger("=== %sk windows ==="%_windowSize2)
+        logger("Constructing scaffolds...")
+        scaffolds = get_scaffolds(bam, fasta.name, _clusters, mapq, minWindows, threads, verbose, _windowSize2)
+
+        logger("Reporting %s scaffolds..."%len(scaffolds))
         outbase = outdir+"/%sk.%sk"%(_windowSize/1000, _windowSize2)
         fastafn = report_scaffolds(outbase, scaffolds, faidx)
     
@@ -312,10 +324,10 @@ def main():
     parser.add_argument("-i", "--bam", nargs="+", help="BAM file(s)")
     parser.add_argument("-f", "--fasta", type=file, help="Genome FastA file")
     parser.add_argument("-o", "--outdir", required=1, help="output name")
-    parser.add_argument("-w", "--windowSize", nargs="+", default=[100, 50, 20, 10], type=int,
-                        help="window size in kb [%(default)s]")
-    parser.add_argument("-z", "--windowSize2", default=[10, 20], type=int, nargs="+", 
-                        help="window size in kb [%(default)s]")
+    parser.add_argument("-w", "--windowSize", nargs="+", default=[1000, 500, 100, 50], type=int,
+                        help="window size in kb used for karyotyping [%(default)s]")
+    parser.add_argument("-z", "--windowSize2", default=[5, 10, 50], type=int, nargs="+", 
+                        help="window size in kb used for scaffolding [%(default)s]")
     parser.add_argument("-m", "--mapq", default=10, type=int,
                         help="mapping quality [%(default)s]")
     parser.add_argument("-u", "--upto", default=0, type=float,
