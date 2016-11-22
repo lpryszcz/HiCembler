@@ -4,6 +4,7 @@ desc="""Report scaffolds by joining contigs based on contact matrix from BAM fil
 TBD:
 - allow for fitting contig into gap within large contig?
 - distance estimation?
+- remove fastq2array and array2scaffolds imports
 """
 epilog="""Author: l.p.pryszcz+git@gmail.com
 Bratislava, 27/10/2016
@@ -20,26 +21,6 @@ from fastq2array import logger, fasta2windows, get_window, plot
 from array2scaffolds import transform, normalize_rows, get_name, get_clusters, array2tree, _average_reduce_2d, report_scaffolds, getNewick
 from FastaIndex import FastaIndex
 
-#'''# update sys.path & environmental PATH
-root = os.path.dirname(os.path.abspath(sys.argv[0]))
-src = ["bin", "bin/snap", "bin/sinkhorn_knopp"]
-paths = [os.path.join(root, p) for p in src]
-sys.path = paths + sys.path
-os.environ["PATH"] = "%s:%s"%(':'.join(paths), os.environ["PATH"])
-
-from sinkhorn_knopp import sinkhorn_knopp
-
-def normalize(d, max_iter=1000, epsilon=0.001):
-    """Return symmetric and fully balanced matrix using SinkhornKnopp"""
-    #logger("Sinkhorn-Knopp normalisation...")    
-    sk = sinkhorn_knopp.SinkhornKnopp(max_iter=max_iter, epsilon=epsilon)
-    # make symmetric & normalise
-    d += d.T
-    d -= np.diag(d.diagonal()/2)
-    d += 1
-    d = sk.fit(d)
-    return d
-#'''
 def normalize_diagional(d, bin_chr, bin_position):
     """Return symmetric and diagonal normalised matrix"""
     #logger("Diagonal normalisation...")    
@@ -106,13 +87,14 @@ def bam2array(arrays, windowSize, chr2window, bam, mapq, upto=1e7, regions=[], v
     proc.terminate()
     return arrays
 
-def load_clusters(fnames):
+def load_clusters(fnames, _windowSize=[]):
     """Load clusters from directory"""
     clusters, windowSize = [], []
     for fn in fnames:
-        clusters.append([l[:-1].split('\t') for l in open(fn)])
         w = int(os.path.basename(fn).split('k')[0])*1000
-        windowSize.append(w)
+        if _windowSize and w/1000 in _windowSize:
+            clusters.append([l[:-1].split('\t') for l in open(fn)])
+            windowSize.append(w)
     return clusters, windowSize
 
 def get_longest(t, maxdist=6, k=2.0):
@@ -223,19 +205,24 @@ def bam2clusters(bam, fasta, outdir, windowSize, mapq, dpi, upto, verbose):
     """Return clusters computed from from windowSizes"""
     clusters = []
     # load clusters
-    fnames = glob.glob(os.path.join(outdir, "*k.clusters.tab"))
+    fnames = glob.glob(os.path.join(outdir, "*k.clusters.tab")) #%",".join(map(str, windowSize))))
     if fnames:
-        clusters, windowSize = load_clusters(fnames)
+        clusters, windowSize = load_clusters(fnames, windowSize)
         return clusters, windowSize
     
     # get windows
     windowSize, windows, chr2window, base2chr, genomeSize = fasta2windows(fasta, windowSize, verbose, skipShorter=0)
     
-    # get array from bam
+    #'''# get array from bam
     logger("Parsing BAM...")
     arrays = [np.zeros((len(w), len(w)), dtype="float32") for w in windows]
     arrays = bam2array(arrays, windowSize, chr2window, bam,  mapq, upto)
-    #npy = np.load(os.path.join(outdir, "%sk.npz"%(windowSize[0]/1000,))); arrays = [npy[npy.files[0]], ]; print [a.shape for a in arrays]
+    ''' # code for regenerating clusters
+    arrays = []
+    for _w in windowSize:
+        npy = np.load(os.path.join(outdir, "%sk.npz"%(_w/1000,)))
+        arrays.append(npy[npy.files[0]])
+    print [a.shape for a in arrays]#'''
     
     faidx = FastaIndex(fasta)
     contig2size = {c: stats[0] for c, stats in faidx.id2stats.iteritems()}
@@ -258,7 +245,7 @@ def bam2clusters(bam, fasta, outdir, windowSize, mapq, dpi, upto, verbose):
         bin_chr = np.array(bin_chr)
         bin_position = np.array(bin_position)
 
-        # logger("Sinkhorn-Knopp normalisation..."); d = normalize(d)
+        # make symmetric & normalise
         d, bin_chr, bin_position = normalize_diagional(d, bin_chr, bin_position)
 
         logger("Assigning contigs to clusters/scaffolds...")
@@ -294,23 +281,17 @@ def join_scaffolds(scaffold1, scaffold2, d, contig2indices, minWindows=3):
     # get subset of array for scaffold1 and scaffold2
     _d = d[:, indices1+indices2][indices1+indices2, :]
     # get orientation: 0: s-s; 1: s-e; 2: e-s; 3: e-e
-    ## contact values for ends of two contigs are compared
-    ## and the max value is taken as true contact
-    ### this should be accurate, but you may consider some ML function
     n1, n2 = len(indices1), len(indices2)
-    # compare diagonals of contact matrix
+    # compare sums of subsets of contact matrix
     i = n2/2
-    '''dflip = np.fliplr(_d[:n1,n2:])
-    d1, d2, d3, d4 = np.diag(_d, k=n1), np.diag(dflip), np.diag(dflip, k=n2-n1), np.diag(_d, k=n2)
-    orientation = np.argmax(map(sum, (d1[:i], d2[:i], d3[-i:], d4[-i:])))#'''
     d1, d2 = _d[:n1/2, n1:], _d[n1-n1/2:n1, n1:]
     orientation = np.argmax(map(np.sum, (d1[:,:i], d1[:,-i:], d2[:,:i], d2[:,-i:])))
     # s - s
     if   orientation == 0:
-        scaffold = get_reversed(scaffold2) + scaffold1 #get_reversed(scaffold1) + scaffold2
+        scaffold = get_reversed(scaffold2) + scaffold1 
     # s - e
     elif orientation == 1:
-        scaffold = scaffold2 + scaffold1 # get_reversed(scaffold1) + get_reversed(scaffold2)
+        scaffold = scaffold2 + scaffold1 
     # e - s
     elif orientation == 2:
         scaffold = scaffold1 + scaffold2 
@@ -368,14 +349,13 @@ def contigs2scaffold(args):
     bin_position = np.array(bin_position)
     
     # make symmetric & normalise
-    #d = normalize(d)
-    d += d.T; d -= np.diag(d.diagonal()/2); d = normalize_rows(d)
-    #d, bin_chr, bin_position = normalize_diagional(d, bin_chr, bin_position)
+    d += d.T
+    d -= np.diag(d.diagonal()/2)
+    d = normalize_rows(d)
     logger(" cluster_%s with %s windows in %s contigs"%(i, d.shape[0], len(contigs)))
     
     # get tree on reduced matrix
     t = array2tree(transform(_average_reduce_2d(d, bin_chr)), np.unique(bin_chr))
-    #t = array2tree(transform(d), bin_chr)
     
     # get scaffold
     scaffold = tree2scaffold(t, d, bin_chr, bin_position, minWindows)
