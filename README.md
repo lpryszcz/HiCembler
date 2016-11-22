@@ -21,7 +21,7 @@ cd HiCembler
 ```
 
 ### Dependencies
-- `numpy` and `matplotlib` ie. `sudo -H pip install -U matplotlib numpy`
+- `numpy`, `scipy`, `fastcluster` and `matplotlib` ie. `sudo -H pip install -U matplotlib numpy scipy fastcluster`
 - [SNAP aligner](https://github.com/amplab/snap)
 - [sinkhorn_knopp](https://github.com/btaba/sinkhorn_knopp)
 
