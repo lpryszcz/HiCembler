@@ -1,0 +1,8 @@
+[submodule "bin/snap"]
+    path = bin/snap
+    url = https://github.com/amplab/snap
+
+[submodule "bin/sinkhorn_knopp"]
+    path = bin/sinkhorn_knopp
+    url = https://github.com/btaba/sinkhorn_knopp
+    
