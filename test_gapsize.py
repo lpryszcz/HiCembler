@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt#; plt.ion()
 from scipy.optimize import curve_fit
 from datetime import datetime
 from collections import Counter
-from bam2scaffolds import bam2array
+from bam2scaffolds import bam2array, normalize_rows
 import pysam
 
 def normalize_diagional(d, bin_chr, bin_position):
@@ -192,7 +192,7 @@ for c in longest_contigs[:25]:
   
   d += d.T
   d -= np.diag(d.diagonal()/2)
-  d = normalize(d)
+  d = normalize(d) #normalize_rows(d)
 
   d2c[0] += [d[i][i] for i in range(d.shape[0]-1)]
   for i in range(len(positions)-1):
@@ -203,7 +203,7 @@ for c in longest_contigs[:25]:
       d2c[dist].append(d[i][j])
 #'''
 
-dists = np.array(sorted(d2c)[:25])
+dists = np.array(sorted(d2c)[:50])
 contacts = [d2c[d] for d in dists]
 
 print "Plotting %s distances..."%len(contacts)
@@ -218,22 +218,24 @@ plt.ylim(ymin=0)#, ymax=20)
 #plt.yscale('log')
 
 print "fitting curve..." # http://stackoverflow.com/a/11209147/632242
-x = dists[5:]; yn = np.array([np.median(c) for c in contacts[5:]])#, dtype='double')
+x = dists; yn = np.array([np.median(c) for c in contacts])#, dtype='double') [2:]
 
 step = dists[1]/4.
 xs = np.arange(0, max(x)+step, step)
 # Non-linear fit
-def func(x, a, b, c): return a * np.exp(-b * x) + c
-popt, pcov = curve_fit(func, x, yn)#maxfev=1000; print popt, pcov
-plt.plot(xs, func(xs, *popt), 'r-', label="Non-linear fit\n$y = %0.2f e^{-%0.2f x} + %0.2f$"%tuple(popt))
+def func(x, b, c, d): return np.exp(-b * x) / c + 1 / (d*x)
+popt, pcov = curve_fit(func, x[3:], yn[3:])#maxfev=1000; print popt, pcov
+plt.plot(xs[1:], func(xs[1:], *popt), 'r-', label="Non-linear fit\n$y = e^{-%0.2f x} / %0.5f + 1 / {%0.2f x} $"%tuple(popt))
 
 def ddd(x, b, c): return np.exp(-b * x) / c 
+#def ddd(x, b, c, d): return np.exp(-b * x) / c + d
+# def ddd(x, b, c, d): return np.exp(-b * x) / c + 1 / d
 popt2, pcov2 = curve_fit(ddd, x, yn)#; print popt, pcov
 plt.plot(xs, ddd(xs, *popt2), 'b--', label="Distance dependent decay\n$ y = e^{-%0.2f x} / %0.5f $"%tuple(popt2))
 
 plt.legend(fancybox=True, shadow=True)
 plt.savefig("test_gapsize.fit.png")
-plt.ylim(ymin=0, ymax=0.02)
+plt.ylim(ymin=0, ymax=yn[0]/30.)
 plt.savefig("test_gapsize.fit.zoom.png")
 dt = datetime.now() - t0; print dt
 
