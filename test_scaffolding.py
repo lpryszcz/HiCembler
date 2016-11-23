@@ -41,10 +41,10 @@ def join_scaffolds(i, scaffold1, scaffold2, d, contig2indices, minWindows=3):
     # e - e
     else:
         scaffold = scaffold1 + get_reversed(scaffold2)
-    header = "%s x %s\torientation: %s\tshape: %s"%(n1, n2, orientation, _d.shape[0])
+    '''header = "%s x %s\torientation: %s\tshape: %s"%(n1, n2, orientation, _d.shape[0])
     footer = " ".join(n for n, rev in scaffold)
     fname = "tmp/%7s.tsv"%i; fname = fname.replace(' ','0')
-    np.savetxt(fname, _d, fmt='%5.f', delimiter='\t', newline='\n', header=header, footer=footer, comments='# ')
+    np.savetxt(fname, _d, fmt='%5.f', delimiter='\t', newline='\n', header=header, footer=footer, comments='# ')'''
     return scaffold
 
 bam = ["/home/lpryszcz/cluster/hic/arath/platanus/ARATH.d05.l100_contig.fa.bam"]
