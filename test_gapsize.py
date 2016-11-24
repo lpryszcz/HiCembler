@@ -223,9 +223,11 @@ x = dists; yn = np.array([np.median(c) for c in contacts])#, dtype='double') [2:
 step = dists[1]/4.
 xs = np.arange(0, max(x)+step, step)
 # Non-linear fit
-def func(x, b, c, d): return np.exp(-b * x) / c + 1 / (d*x)
-popt, pcov = curve_fit(func, x[3:], yn[3:])#maxfev=1000; print popt, pcov
-plt.plot(xs[1:], func(xs[1:], *popt), 'r-', label="Non-linear fit\n$y = e^{-%0.2f x} / %0.5f + 1 / {%0.2f x} $"%tuple(popt))
+#def func(x, b, c, d): return np.exp(-b * x) / c + 1 / (d*x)
+def func(x, d, e): return 1 / (d*x**e)
+#def func(x, d): return 1 / (d*x)
+popt, pcov = curve_fit(func, x[5:], yn[5:])#maxfev=1000; print popt, pcov
+plt.plot(xs[1:], func(xs[1:], *popt), 'r-', label="Non-linear fit\n$ 1 / {%0.2f x^ {%0.2f}} $"%tuple(popt))
 
 def ddd(x, b, c): return np.exp(-b * x) / c 
 #def ddd(x, b, c, d): return np.exp(-b * x) / c + d

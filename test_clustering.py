@@ -30,6 +30,11 @@ def normalize(d, bin_chr, bin_position, max_iter=1000, epsilon=0.001):
     # make symmetric & normalise
     d += d.T
     d -= np.diag(d.diagonal()/2)
+    # normalize by windows size
+    sizes = np.diff(bin_position, axis=1)[:, 0]
+    c = Counter(sizes)
+    windowSize, occurencies = c.most_common(1)[0]; print windowSize, occurencies
+    d *= 1. * windowSize / sizes
     # full balancing
     #sk = sinkhorn_knopp.SinkhornKnopp(max_iter=max_iter, epsilon=epsilon); d += 1; d /= d.max(); d = sk.fit(d) * 100000
     # 1 round balancing
@@ -286,7 +291,7 @@ def get_subtrees(d, bin_chr, bin_position, method="ward", nchrom=1000, distfrac=
         subtrees.append(pruned)
         c = Counter(get_chr_name(n) for n in pruned)
         print i, len(names), tdist, maxtdist, bestdist, len(pruned), c.most_common(5)        
-        #t2 = truncate(ete3.Tree(t.write()), maxd=5); t2.render('tree_%s.pdf'%i) 
+        t2 = truncate(ete3.Tree(t.write()), maxd=5); t2.render('tree_%s.pdf'%i) 
         
         # prune the tree
         ancestors = n.get_ancestors()
@@ -350,7 +355,7 @@ def get_subtrees0(d, bin_chr, bin_position, method="ward", nchrom=1000, distfrac
     return subtrees
 
 
-def main(fn, method="ward"):
+def main(fn, method="ward"): #
     d, bin_chr, bin_position, contig2size = load_matrix(fn, remove_shorter=0)
     logger(" Loaded matrix %s..."%(str(d.shape),))
     d = transform(d)

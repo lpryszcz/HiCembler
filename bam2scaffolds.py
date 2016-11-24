@@ -10,7 +10,7 @@ epilog="""Author: l.p.pryszcz+git@gmail.com
 Bratislava, 27/10/2016
 """
 
-import ete3, glob, gzip, os, resource, subprocess, sys
+import ete3, glob, gzip, os, pysam, resource, subprocess, sys
 import scipy.cluster.hierarchy as sch
 import fastcluster
 import numpy as np
@@ -20,6 +20,36 @@ from multiprocessing import Pool
 from fastq2array import logger, fasta2windows, get_window, plot
 from array2scaffolds import transform, normalize_rows, get_name, get_clusters, array2tree, _average_reduce_2d, report_scaffolds, getNewick
 from FastaIndex import FastaIndex
+import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
+
+# update sys.path & environmental PATH
+root = os.path.dirname(os.path.abspath(sys.argv[0]))
+src = ["bin", "bin/snap", "bin/sinkhorn_knopp"]
+paths = [os.path.join(root, p) for p in src]
+sys.path = paths + sys.path
+os.environ["PATH"] = "%s:%s"%(':'.join(paths), os.environ["PATH"])
+
+from sinkhorn_knopp import sinkhorn_knopp
+
+def normalize(d):
+    """Return fully balanced matrix"""
+    sk = sinkhorn_knopp.SinkhornKnopp() #max_iter=100000, epsilon=0.00001)
+    # make symmetric & normalise
+    d += d.T
+    d -= np.diag(d.diagonal()/2)
+    d += 1
+    d = sk.fit(d)
+    return d
+
+def normalize_window_size(d, bin_chr, bin_position):
+    """Return symmetric and normalised matrix by window size"""
+    # normalise by window size
+    sizes = np.diff(bin_position, axis=1)[:, 0]
+    c = Counter(sizes)
+    windowSize, occurencies = c.most_common(1)[0]#; print windowSize
+    d *= 1. * windowSize / sizes    
+    return d, bin_chr, bin_position    
 
 def normalize_diagional(d, bin_chr, bin_position):
     """Return symmetric and diagonal normalised matrix"""
@@ -48,8 +78,9 @@ def _get_samtools_proc(bam, mapq=0, regions=[], skipFlag=3980):
     proc = subprocess.Popen(args, stdout=subprocess.PIPE)
     return proc
 
-def bam2array(arrays, windowSize, chr2window, bam, mapq, upto=1e7, regions=[], verbose=1):
+def bam2array(windows, windowSize, chr2window, bam, mapq, upto=1e7, regions=[], verbose=1, threads=1):
     """Return contact matrix based on BAM"""
+    arrays = [np.zeros((len(w), len(w)), dtype="float32") for w in windows]
     i = 1
     # init empty array
     for _bam in bam:
@@ -85,6 +116,62 @@ def bam2array(arrays, windowSize, chr2window, bam, mapq, upto=1e7, regions=[], v
         logger(" %s alignments parsed"%i)
     # stop subprocess
     proc.terminate()
+    return arrays
+    
+def _bam2array(args):
+    """Parse pysam alignments and return matching windows"""
+    _bam, regions, mapq, windowSize, chr2window = args 
+    data = [Counter() for ii in range(len(windowSize))]
+    proc = _get_samtools_proc(_bam, mapq, regions)
+    # process reads from given library
+    for line in proc.stdout:
+        # unload data
+        ref1, start1, mapq, cigar, ref2, start2, insertSize, seq = line.split('\t')[2:10]
+        start1, start2, seqlen = int(start1), int(start2), len(seq)
+        # update ref if alignment in the same chrom
+        if ref2 == "=":
+            ref2 = ref1
+        # skip if contig not present in array
+        if ref1 not in chr2window[0] or ref2 not in chr2window[0]:
+            continue
+        # get windows
+        for ii in range(len(windowSize)):
+            w1 = get_window(ref1, start1, seqlen, windowSize[ii], chr2window[ii])
+            w2 = get_window(ref2, start2, seqlen, windowSize[ii], chr2window[ii])
+            # matrix is symmetrix, so make sure to add only to one part
+            if w2 < w1:
+                w1, w2 = w2, w1
+            # update contact array
+                data[ii][(w1, w2)] += 1
+                
+    # stop subprocess
+    proc.terminate()
+    return data
+
+def bam2array_multi(windows, windowSize, chr2window, bam, mapq, upto=1e7, regions=[], verbose=1, threads=1):
+    """Return contact matrix based on BAM"""
+    arrays = [np.zeros((len(w), len(w)), dtype="float32") for w in windows]    
+    i = 1
+    # init empty array
+    for _bam in bam:
+        if verbose:
+            logger(" %s"%_bam)
+        if not regions:
+            regions = chr2window[0].keys()#; print regions[:10]
+        args = [(_bam, [region], mapq, windowSize, chr2window) for region in regions]
+        p = Pool(threads)
+        for wdata in p.imap_unordered(_bam2array, args, chunksize=100):
+            for ii, wdataii in enumerate(wdata):
+                #arrays[ii] += wdataii
+                for (w1, w2), c in wdataii.iteritems():
+                    arrays[ii][w1][w2] += c
+                    if not ii: i += c
+            #i = arrays[0].sum()
+            if upto and i>upto:
+                break
+            sys.stderr.write(" %s \r"%i)
+    if verbose:
+        logger(" %s alignments parsed"%i)
     return arrays
 
 def load_clusters(fnames, _windowSize=[]):
@@ -194,14 +281,13 @@ def get_clusters(outbase, d, contig2size, bin_chr, bin_position, method="ward", 
     logger("Reporting %s clusters to %s ..."%(len(clusters), outfile))
     with open(outfile, "w") as out:
         for i, cluster in enumerate(clusters, 1):
-            #print " cluster_%s %s windows; %s"%(i, len(cluster), Counter(get_chromosome(cluster).most_common(3)))
             clSize = sum(contig2size[c] for c in cluster)
             totsize += clSize
             out.write("\t".join(cluster)+"\n")
     logger("  %3s bp in %s clusters generated from %s contigs."%(totsize, len(clusters), len(contig2cluster)))
     return clusters        
     
-def bam2clusters(bam, fasta, outdir, windowSize, mapq, dpi, upto, verbose):
+def bam2clusters(bam, fasta, outdir, windowSize, mapq, threads, dpi, upto, verbose):
     """Return clusters computed from from windowSizes"""
     clusters = []
     # load clusters
@@ -215,14 +301,7 @@ def bam2clusters(bam, fasta, outdir, windowSize, mapq, dpi, upto, verbose):
     
     #'''# get array from bam
     logger("Parsing BAM...")
-    arrays = [np.zeros((len(w), len(w)), dtype="float32") for w in windows]
-    arrays = bam2array(arrays, windowSize, chr2window, bam,  mapq, upto)
-    ''' # code for regenerating clusters
-    arrays = []
-    for _w in windowSize:
-        npy = np.load(os.path.join(outdir, "%sk.npz"%(_w/1000,)))
-        arrays.append(npy[npy.files[0]])
-    print [a.shape for a in arrays]#'''
+    arrays = bam2array_multi(windows, windowSize, chr2window, bam,  mapq, upto, threads=threads)
     
     faidx = FastaIndex(fasta)
     contig2size = {c: stats[0] for c, stats in faidx.id2stats.iteritems()}
@@ -246,7 +325,8 @@ def bam2clusters(bam, fasta, outdir, windowSize, mapq, dpi, upto, verbose):
         bin_position = np.array(bin_position)
 
         # make symmetric & normalise
-        d, bin_chr, bin_position = normalize_diagional(d, bin_chr, bin_position)
+        #d, bin_chr, bin_position = normalize_diagional(d, bin_chr, bin_position)
+        d, bin_chr, bin_position = normalize_window_size(d, bin_chr, bin_position)
 
         logger("Assigning contigs to clusters/scaffolds...")
         _clusters = get_clusters(outfn, d, contig2size, bin_chr, bin_position)
@@ -307,11 +387,8 @@ def get_contig2indices(bin_chr):
         contig2indices[c].append(i)
     return contig2indices
     
-def tree2scaffold(t, d, bin_chr, bin_position, minWindows):
+def tree2scaffold(t, d, bin_chr, bin_position, contig2indices, minWindows):
     """Scaffold contigs based on distance matrix and tree."""
-    # get contig with indices
-    contig2indices = get_contig2indices(bin_chr)
-    
     # populate internal nodes with growing scaffolds
     for n in t.traverse('postorder'):
         # add scaffold for each leave
@@ -324,18 +401,17 @@ def tree2scaffold(t, d, bin_chr, bin_position, minWindows):
         # and combine scaffolds
         n.scaffold = join_scaffolds(n1.scaffold, n2.scaffold, d, contig2indices, minWindows)
 
-    # estimate distances
     return t.scaffold
 
 def contigs2scaffold(args):
     """Combine contigs into scaffold"""
-    i, bam, fasta, windowSize, contigs, mapq, minWindows = args
-    # get array from bam
+    i, bam, fasta, windowSize, contigs, mapq, minWindows, params = args
+    
     # get windows
     data = fasta2windows(fasta, windowSize, verbose=0, skipShorter=1, contigs=set(contigs), filterwindows=0)
     windowSize, windows, chr2window, base2chr, genomeSize = data
 
-    #logger("  Parsing BAM...")
+    # get array from bam
     arrays = [np.zeros((len(w), len(w)), dtype="float32") for w in windows]
     arrays = bam2array(arrays, windowSize, chr2window, bam,  mapq, regions=contigs, verbose=0)
     d = arrays[0]
@@ -348,34 +424,165 @@ def contigs2scaffold(args):
     bin_chr = np.array(bin_chr)
     bin_position = np.array(bin_position)
     
+    logger(" cluster_%s with %s windows for %s out of %s contigs"%(i, d.shape[0], len(np.unique(bin_chr)), len(contigs)))
+
+    # skip if empty array or report without scaffolding if only one contig
+    if not d.shape[0]:
+        return []
+    if len(np.unique(bin_chr)) == 1:
+        return [(bin_chr[0], 0)]
+        
     # make symmetric & normalise
     d += d.T
     d -= np.diag(d.diagonal()/2)
     d = normalize_rows(d)
-    logger(" cluster_%s with %s windows in %s contigs"%(i, d.shape[0], len(contigs)))
-    
+
     # get tree on reduced matrix
     t = array2tree(transform(_average_reduce_2d(d, bin_chr)), np.unique(bin_chr))
     
+    # get contig with indices
+    contig2indices = get_contig2indices(bin_chr)
+    
     # get scaffold
-    scaffold = tree2scaffold(t, d, bin_chr, bin_position, minWindows)
+    scaffold = tree2scaffold(t, d, bin_chr, bin_position, contig2indices, minWindows)
+
+    # estimate & add gaps
+    faidx = FastaIndex(fasta)
+    contig2size = {c: stats[0] for c, stats in faidx.id2stats.iteritems()}
+    scaffold = scaffold2gaps(d, bin_chr, bin_position, scaffold, params, contig2indices, contig2size)
     return scaffold
 
-def get_scaffolds(bam, fasta, clusters, mapq, minWindows, threads, verbose, windowSize=10):
+def scaffold2gaps(d, bin_chr, bin_position, scaffold, params, contig2indices, contig2size):
+    """Add gaps to scaffolds"""
+    d = normalize(d)
+    scaffold_with_gaps = []
+    for i, (c, o) in enumerate(scaffold[:-1]):
+        c2, o2 = scaffold[i+1]
+        contacts = d[contig2indices[c]][:, contig2indices[c2]].reshape(len(contig2indices[c])*len(contig2indices[c2]))
+        distances = [distance_func(_c, *params) for _c in contacts] # skip outliers ie 0.9 percentile
+        gapSize = int(np.median(distances)*1000 - contig2size[c]/2 - contig2size[c2]/2) 
+        print gapSize, contig2size[c], contig2size[c2], np.mean(distances), np.std(distances), distances
+        scaffold_with_gaps.append((c, o, gapSize))
+    # add last contig without gap
+    c, o = scaffold[-1]
+    scaffold_with_gaps.append((c, o, 0))
+    return scaffold_with_gaps
+
+def distance_func(x, a, b):
+    """Function to calculating distance from normalised contact frequency"""
+    return (1./(a*x)) **(1./b)
+    
+def contact_func(x, a, b):
+    """Function to calculating normalised contact frequency from distance"""
+    return 1./(a * x ** b)
+
+def estimate_distance_parameters(out, bam, mapq, contig2size, windowSize=10, skipfirst=5, icontigs=25, upto=1e5):
+    """Return estimated parameters"""
+    logger(" Estimating distance parameters...")
+    i = 0
+    d2c = {0: []}
+    longest_contigs = sorted(contig2size, key=lambda x: contig2size[x], reverse=1)
+    maxdist = 0.75 * contig2size[longest_contigs[0]] / 1000.
+    for c in longest_contigs[:icontigs]:
+        s = contig2size[c]
+        sys.stderr.write(' %s %s bp   \r'%(c, s))
+        n = s / windowSize + 1 # since windowSize is in kb
+        positions = range(windowSize, n*windowSize, windowSize)
+        arrays = [np.zeros((n, n), dtype='float32')]
+        chr2window = [{c: 0}]
+        arrays = bam2array(arrays, [windowSize], chr2window, bam, mapq, regions=[c], upto=upto, verbose=0)
+        d = arrays[0]
+        i += d.sum()
+        d += d.T
+        d -= np.diag(d.diagonal()/2)
+        d = normalize(d) #normalize_rows(d)
+        
+        d2c[0] += [d[i][i] for i in range(d.shape[0]-1)]
+        for i in range(len(positions)-1):
+            for j in range(i, len(positions)):
+                dist = (positions[j]-positions[i]) / 1000 
+                if dist not in d2c:
+                    d2c[dist] = []
+                d2c[dist].append(d[i][j])
+        if i>upto:
+            break
+
+    # plot up to 0.75x max dist
+    dists = np.array([d for d in sorted(d2c)[:30] if d<maxdist])
+    contacts = [d2c[d] for d in dists]
+
+    plt.title("Normalised HiC contacts vs distance")
+    plt.boxplot(contacts, 1, '', positions=dists, widths=.75*dists[1])
+    plt.xticks(rotation=90)
+
+    plt.xlabel("Genomic distance [kb]")
+    plt.ylabel("Normalised contacts")
+    plt.xlim(xmin=-dists[1])
+    plt.ylim(ymin=0)
+
+    x = dists
+    yn = np.array([np.median(c) for c in contacts])
+    step = dists[1]/4.
+    xs = np.arange(0, max(x)+step, step)
+
+    params, pcov = curve_fit(contact_func, x[skipfirst:], yn[skipfirst:])
+    plt.plot(xs[1:], contact_func(xs[1:], *params), 'r-', label="Fit\n$ y = 1 / {%0.2f x^ {%0.2f}} $"%tuple(params))
+
+    outfn1, outfn2 = out+".distance_fit.png", out+".distance_fit.zoom.png"
+    plt.legend(fancybox=True, shadow=True)
+    plt.savefig(outfn1)
+    plt.ylim(ymin=0, ymax=yn[0]/30.)
+    plt.savefig(outfn2)
+    logger("  fit stored as %s"%outfn1)
+    return params
+    
+def get_scaffolds(out, bam, fasta, clusters, mapq, minWindows, threads, verbose, windowSize=10):
     """Return scaffolds"""
     scaffolds = []
     faidx = FastaIndex(fasta)
     contig2size = {c: stats[0] for c, stats in faidx.id2stats.iteritems()}
+    
+    # estimate distance parameters
+    params = estimate_distance_parameters(out, bam, mapq, contig2size, windowSize*1000)
+    # 
     if threads > 1:
         p = Pool(threads)
-        iterable = [(i, bam, fasta, [windowSize], contigs, mapq, minWindows) for i, contigs in enumerate(clusters, 1)]
+        iterable = [(i, bam, fasta, [windowSize], contigs, mapq, minWindows, params) for i, contigs in enumerate(clusters, 1)]
         for scaffold in p.imap(contigs2scaffold, iterable):
             scaffolds.append(scaffold)
     else:
-        for i, contigs in enumerate(clusters, 1):
-            scaffold = contigs2scaffold([i, bam, fasta, [windowSize], contigs, mapq, minWindows])
+        for i, contigs in enumerate(clusters, 1): 
+            scaffold = contigs2scaffold([i, bam, fasta, [windowSize], contigs, mapq, minWindows, params])
             scaffolds.append(scaffold)
     return scaffolds
+
+def report_scaffolds(outbase, scaffolds, faidx, w=60):
+    """Save scaffolds"""
+    totsize = 0
+    fastafn = outbase+".scaffolds.fa"
+    scaffoldfn = outbase+".scaffolds.tab"
+    with open(fastafn, "w") as out, open(scaffoldfn, "w") as outscaffolds:
+        for i, scaffold in enumerate(scaffolds, 1):
+            # skip empty scaffolds
+            if not scaffold:
+                continue
+            seqs = []
+            elements = []
+            for c, o, gapSize in scaffold:
+                seqs.append(faidx.get_sequence(c, reverse=o))
+                seqs.append('N'*gapSize)
+                if o:
+                    elements.append("%s-"%c)
+                else:
+                    elements.append("%s+"%c)
+            # store seq and architecture
+            seq = "".join(seqs)
+            seq = "\n".join(seq[s:s+w] for s in range(0, len(seq), w))
+            out.write(">scaffold%s %s bp in %s contigs\n%s\n"%(i, len(seq), len(elements), seq))
+            outscaffolds.write("%s\n"%"\t".join(elements))
+            totsize += len(seq)
+    logger(" %s in %s scaffolds reported to %s"%(totsize, len(scaffolds), fastafn))
+    return fastafn 
     
 def bam2scaffolds(bam, fasta, outdir, windowSize, windowSize2, mapq, threads, dpi, upto, minWindows, verbose):
     """Report scaffolds based on BAM file"""
@@ -383,7 +590,7 @@ def bam2scaffolds(bam, fasta, outdir, windowSize, windowSize2, mapq, threads, dp
 
     # calculate clusters for various window size
     logger("=== Clustering ===")
-    clusters, _windowSize = bam2clusters(bam, fasta, outdir, windowSize, mapq, dpi, upto, verbose)
+    clusters, _windowSize = bam2clusters(bam, fasta, outdir, windowSize, mapq, threads, dpi, upto, verbose)
 
     # use preselected window size
     if len(windowSize)==1 and windowSize[0]*1000 in _windowSize:
@@ -398,12 +605,13 @@ def bam2scaffolds(bam, fasta, outdir, windowSize, windowSize2, mapq, threads, dp
     #return
     
     for _windowSize2 in windowSize2:
+        outbase = outdir+"/%sk.%sk"%(_windowSize/1000, _windowSize2)
+        
         logger("=== %sk windows ==="%_windowSize2)
         logger("Constructing scaffolds...")
-        scaffolds = get_scaffolds(bam, fasta.name, _clusters, mapq, minWindows, threads, verbose, _windowSize2)
+        scaffolds = get_scaffolds(outbase, bam, fasta.name, _clusters, mapq, minWindows, threads, verbose, _windowSize2)
 
         logger("Reporting %s scaffolds..."%len(scaffolds))
-        outbase = outdir+"/%sk.%sk"%(_windowSize/1000, _windowSize2)
         fastafn = report_scaffolds(outbase, scaffolds, faidx)
     
     logger("Done!")
@@ -419,9 +627,9 @@ def main():
     parser.add_argument("-i", "--bam", nargs="+", help="BAM file(s)")
     parser.add_argument("-f", "--fasta", type=file, help="Genome FastA file")
     parser.add_argument("-o", "--outdir", required=1, help="output name")
-    parser.add_argument("-w", "--windowSize", nargs="+", default=[1000, 500, 100, 50], type=int,
+    parser.add_argument("-w", "--windowSize", nargs="+", default=[100, 50, 20, 10], type=int,
                         help="window size in kb used for karyotyping [%(default)s]")
-    parser.add_argument("-z", "--windowSize2", default=[5, 10, 50], type=int, nargs="+", 
+    parser.add_argument("-z", "--windowSize2", default=[5, 10, 50, 2], type=int, nargs="+", 
                         help="window size in kb used for scaffolding [%(default)s]")
     parser.add_argument("-m", "--mapq", default=10, type=int,
                         help="mapping quality [%(default)s]")

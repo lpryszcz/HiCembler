@@ -395,6 +395,9 @@ def report_scaffolds(outbase, scaffolds, faidx, w=60):
     scaffoldfn = outbase+".scaffolds.tab"
     with open(fastafn, "w") as out, open(scaffoldfn, "w") as outscaffolds:
         for i, scaffold in enumerate(scaffolds, 1):
+            # skip empty scaffolds
+            if not scaffold:
+                continue
             seqs = []
             elements = []
             for c, o in scaffold:
