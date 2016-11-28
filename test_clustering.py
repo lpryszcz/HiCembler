@@ -25,20 +25,22 @@ os.environ["PATH"] = "%s:%s"%(':'.join(paths), os.environ["PATH"])
 
 from sinkhorn_knopp import sinkhorn_knopp
 
-def normalize(d, bin_chr, bin_position, max_iter=1000, epsilon=0.001):
+def normalize(d, bin_chr, bin_position, max_iter=1000, epsilon=0.00001, windowSize=1000.):
     """Return symmetric and fully balanced matrix using SinkhornKnopp"""
     # make symmetric & normalise
     d += d.T
     d -= np.diag(d.diagonal()/2)
+    #return d, bin_chr, bin_position
     # normalize by windows size
-    sizes = np.diff(bin_position, axis=1)[:, 0]
-    c = Counter(sizes)
-    windowSize, occurencies = c.most_common(1)[0]; print windowSize, occurencies
-    d *= 1. * windowSize / sizes
+    sizes = np.diff(bin_position, axis=1)#[:, 0]
+    #c = Counter(sizes.reshape(len(sizes)))
+    #windowSize, occurencies = c.most_common(1)[0]; print windowSize, occurencies
+    #d *= 1. * windowSize / sizes*sizes.T
+    #d *= (windowSize **2 / (sizes*sizes.T))**0.5; print sizes.shape, sizes.T.shape #reshape(len(sizes),1))
     # full balancing
-    #sk = sinkhorn_knopp.SinkhornKnopp(max_iter=max_iter, epsilon=epsilon); d += 1; d /= d.max(); d = sk.fit(d) * 100000
+    sk = sinkhorn_knopp.SinkhornKnopp(max_iter=max_iter, epsilon=epsilon); d += 1; d /= d.max(); d = sk.fit(d) * 1000
     # 1 round balancing
-    #sk = sinkhorn_knopp.SinkhornKnopp(max_iter=1); d += 1; d /= d.max(); d = sk.fit(d) * 100000
+    #sk = sinkhorn_knopp.SinkhornKnopp(max_iter=1); d += 1; d /= d.max(); d = sk.fit(d) *1000#* windowSize
     '''
     axis = 1; d *= 1. * d.sum(axis=axis).max() / d.sum(axis=axis); print "axis %s norm"%axis #normalize_rows(d)
     ''' # diagonal mean normalisation
@@ -203,10 +205,10 @@ def truncate(t, mind=3, maxd=0):
     return t
 
 def get_names(bin_chr, bin_position):
-    return ["%s %s"%(c, s) for c, (s, e) in zip(bin_chr, bin_position)]
+    return ["%s %s"%(get_name(c), s) for c, (s, e) in zip(bin_chr, bin_position)]
 
 def get_name(contig):
-    return contig.split()[0]
+    return contig.split()[0].split('|')[-1]
     
 def get_chr_name(n):
     return n.split()[0].split(".")[0]

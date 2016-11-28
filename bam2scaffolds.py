@@ -32,23 +32,28 @@ os.environ["PATH"] = "%s:%s"%(':'.join(paths), os.environ["PATH"])
 
 from sinkhorn_knopp import sinkhorn_knopp
 
-def normalize(d):
+def normalize(d, max_iter=1000, epsilon=0.00001):
     """Return fully balanced matrix"""
-    sk = sinkhorn_knopp.SinkhornKnopp() #max_iter=100000, epsilon=0.00001)
+    sk = sinkhorn_knopp.SinkhornKnopp(max_iter=max_iter, epsilon=epsilon)
     # make symmetric & normalise
     d += d.T
     d -= np.diag(d.diagonal()/2)
     d += 1
-    d = sk.fit(d)
+    d = sk.fit(d) * 1000
     return d
 
-def normalize_window_size(d, bin_chr, bin_position):
+def normalize_window_size(d, bin_chr, bin_position, windowSize=0):
     """Return symmetric and normalised matrix by window size"""
-    # normalise by window size
-    sizes = np.diff(bin_position, axis=1)[:, 0]
-    c = Counter(sizes)
-    windowSize, occurencies = c.most_common(1)[0]#; print windowSize
-    d *= 1. * windowSize / sizes    
+    # make symmetric & normalise
+    d += d.T
+    d -= np.diag(d.diagonal()/2)
+    return d, bin_chr, bin_position
+    # normalize by windows size
+    sizes = np.diff(bin_position, axis=1)#[:, 0]
+    if not windowSize:
+        c = Counter(sizes.reshape(len(sizes)))
+        windowSize, occurencies = c.most_common(1)[0]; print windowSize, occurencies
+    d *= 1. * windowSize **2 / (sizes*sizes.T)
     return d, bin_chr, bin_position    
 
 def normalize_diagional(d, bin_chr, bin_position):
@@ -142,7 +147,7 @@ def _bam2array(args):
             if w2 < w1:
                 w1, w2 = w2, w1
             # update contact array
-                data[ii][(w1, w2)] += 1
+            data[ii][(w1, w2)] += 1
                 
     # stop subprocess
     proc.terminate()
@@ -207,7 +212,15 @@ def get_subtrees(d, bin_chr, bin_position, method="ward", nchrom=1000, distfrac=
     i = 0
     subtrees = []
     names = ["%s %s"%(c, s) for c, (s, e) in zip(bin_chr, bin_position)] #names = get_names(bin_chr, bin_position)
+    Z = fastcluster.linkage(d[np.triu_indices(d.shape[0], 1)], method=method)
+
+    ''' NEE TO BE SOLVED!
     Z = fastcluster.linkage(d[np.triu_indices(d.shape[0], 1)], method=method) 
+  File "/usr/local/lib/python2.7/dist-packages/fastcluster.py", line 246, in linkage
+    linkage_wrap(N, X, Z, mthidx[method])
+KeyError: 100000
+    '''
+    
     # t = distance_matrix2tree(Z, names); print len(set(t.get_leaf_names())), len(names)
     tree = sch.to_tree(Z, False)
     t = ete3.Tree(getNewick(tree, "", tree.dist, names))
@@ -299,7 +312,7 @@ def bam2clusters(bam, fasta, outdir, windowSize, mapq, threads, dpi, upto, verbo
     # get windows
     windowSize, windows, chr2window, base2chr, genomeSize = fasta2windows(fasta, windowSize, verbose, skipShorter=0)
     
-    #'''# get array from bam
+    # get array from bam
     logger("Parsing BAM...")
     arrays = bam2array_multi(windows, windowSize, chr2window, bam,  mapq, upto, threads=threads)
     
@@ -325,11 +338,15 @@ def bam2clusters(bam, fasta, outdir, windowSize, mapq, threads, dpi, upto, verbo
         bin_position = np.array(bin_position)
 
         # make symmetric & normalise
+        logger("Balancing array...")
+        d = normalize(d)
         #d, bin_chr, bin_position = normalize_diagional(d, bin_chr, bin_position)
-        d, bin_chr, bin_position = normalize_window_size(d, bin_chr, bin_position)
+        #d, bin_chr, bin_position = normalize_window_size(d, bin_chr, bin_position, _windowSize)
+        with open(outfn+".balanced.npz", "w") as out:
+            np.savez_compressed(out, d)
 
         logger("Assigning contigs to clusters/scaffolds...")
-        _clusters = get_clusters(outfn, d, contig2size, bin_chr, bin_position)
+        _clusters = get_clusters(outfn, d, contig2size, bin_chr, bin_position, _windowSize)
         clusters.append(_clusters)
     return clusters, windowSize
 
@@ -356,7 +373,10 @@ def join_scaffolds(scaffold1, scaffold2, d, contig2indices, minWindows=3):
     # skip contigs with less windows than minWindows
     if len(indices1) < len(indices2):
         scaffold1, indices1, scaffold2, indices2 = scaffold2, indices2, scaffold1, indices1
+    # skip scaffolding if len of contig smaller than necessary
     if len(indices2) < minWindows:
+        if len(indices1) < minWindows:
+            return []
         return scaffold1
     # get subset of array for scaffold1 and scaffold2
     _d = d[:, indices1+indices2][indices1+indices2, :]
@@ -387,8 +407,11 @@ def get_contig2indices(bin_chr):
         contig2indices[c].append(i)
     return contig2indices
     
-def tree2scaffold(t, d, bin_chr, bin_position, contig2indices, minWindows):
-    """Scaffold contigs based on distance matrix and tree."""
+def tree2scaffold(t, d, bin_chr, bin_position, minWindows):
+    """Scaffold contigs based on distance matrix and tree."""    
+    # get contig with indices
+    contig2indices = get_contig2indices(bin_chr)
+
     # populate internal nodes with growing scaffolds
     for n in t.traverse('postorder'):
         # add scaffold for each leave
@@ -424,49 +447,68 @@ def contigs2scaffold(args):
     bin_chr = np.array(bin_chr)
     bin_position = np.array(bin_position)
     
-    logger(" cluster_%s with %s windows for %s out of %s contigs"%(i, d.shape[0], len(np.unique(bin_chr)), len(contigs)))
-
     # skip if empty array or report without scaffolding if only one contig
     if not d.shape[0]:
         return []
     if len(np.unique(bin_chr)) == 1:
-        return [(bin_chr[0], 0)]
+        return [(bin_chr[0], 0, 0)]
         
     # make symmetric & normalise
     d += d.T
     d -= np.diag(d.diagonal()/2)
-    d = normalize_rows(d)
+    #d = normalize_rows(d)
 
     # get tree on reduced matrix
     t = array2tree(transform(_average_reduce_2d(d, bin_chr)), np.unique(bin_chr))
     
-    # get contig with indices
-    contig2indices = get_contig2indices(bin_chr)
-    
     # get scaffold
-    scaffold = tree2scaffold(t, d, bin_chr, bin_position, contig2indices, minWindows)
+    scaffold = tree2scaffold(t, d, bin_chr, bin_position, minWindows)
 
     # estimate & add gaps
-    faidx = FastaIndex(fasta)
-    contig2size = {c: stats[0] for c, stats in faidx.id2stats.iteritems()}
-    scaffold = scaffold2gaps(d, bin_chr, bin_position, scaffold, params, contig2indices, contig2size)
+    #scaffold = [(c, o, 1) for c, o in scaffold]; contigbp, gapbp = 1, 0
+    scaffold, contigbp, gapbp = scaffold2gaps(normalize(_average_reduce_2d(d, bin_chr)), np.unique(bin_chr), scaffold, params, fasta)
+    
+    info = " cluster_%s with %s windows for %s out of %s contigs; %s bp in gaps [%2.2f%s]"
+    logger(info%(i, d.shape[0], len(np.unique(bin_chr)), len(contigs), gapbp, 100.*gapbp/contigbp, '%'))
+
     return scaffold
 
-def scaffold2gaps(d, bin_chr, bin_position, scaffold, params, contig2indices, contig2size):
-    """Add gaps to scaffolds"""
-    d = normalize(d)
+def scaffold2gaps(d, bin_chr, scaffold, params, fasta, mingap=100, maxgap=1000000, gapfrac=1.5):
+    """Add gaps to scaffolds
+    Here, there may be some smarter way of doing it using ML and all contig contacts at the same time. 
+    """
+    faidx = FastaIndex(fasta)
+    contig2size = {c: stats[0] for c, stats in faidx.id2stats.iteritems()}
+    contig2indices = get_contig2indices(bin_chr)
     scaffold_with_gaps = []
+    contigbp = gapbp = 0
     for i, (c, o) in enumerate(scaffold[:-1]):
         c2, o2 = scaffold[i+1]
+        csize, c2size = contig2size[c], contig2size[c2]
+        '''
         contacts = d[contig2indices[c]][:, contig2indices[c2]].reshape(len(contig2indices[c])*len(contig2indices[c2]))
         distances = [distance_func(_c, *params) for _c in contacts] # skip outliers ie 0.9 percentile
-        gapSize = int(np.median(distances)*1000 - contig2size[c]/2 - contig2size[c2]/2) 
-        print gapSize, contig2size[c], contig2size[c2], np.mean(distances), np.std(distances), distances
-        scaffold_with_gaps.append((c, o, gapSize))
+        gapSize = int(np.median(distances)*1000 - contig2size[c]/2 - contig2size[c2]/2)
+        print gapSize, csize, c2size, distance, np.median(distances), np.mean(distances), np.std(distances), distances'''
+        contacts = d[contig2indices[c][0],contig2indices[c2][0]]
+        distance = distance_func(contacts, *params)*1000
+        gapSize = distance - contig2size[c]/2 - contig2size[c2]/2
+        if gapSize < mingap:
+            gapSize = mingap
+        elif gapSize > gapfrac * (contig2size[c] + contig2size[c2]):
+            gapSize = gapfrac * (contig2size[c] + contig2size[c2])
+        if gapSize > maxgap:
+            gapSize = maxgap
+        # round to int
+        gapSize = int(round(gapSize))
+        contigbp += csize
+        gapbp += gapSize
+        scaffold_with_gaps.append((c, o, gapSize))#; print gapSize, csize, c2size, distance
     # add last contig without gap
     c, o = scaffold[-1]
     scaffold_with_gaps.append((c, o, 0))
-    return scaffold_with_gaps
+    #sys.exit()
+    return scaffold_with_gaps, contigbp, gapbp
 
 def distance_func(x, a, b):
     """Function to calculating distance from normalised contact frequency"""
@@ -510,7 +552,8 @@ def estimate_distance_parameters(out, bam, mapq, contig2size, windowSize=10, ski
     # plot up to 0.75x max dist
     dists = np.array([d for d in sorted(d2c)[:30] if d<maxdist])
     contacts = [d2c[d] for d in dists]
-
+    
+    plt.figure()
     plt.title("Normalised HiC contacts vs distance")
     plt.boxplot(contacts, 1, '', positions=dists, widths=.75*dists[1])
     plt.xticks(rotation=90)
@@ -621,7 +664,7 @@ def main():
     usage   = "%(prog)s -v" #usage=usage, 
     parser  = argparse.ArgumentParser(description=desc, epilog=epilog, \
                                       formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('--version', action='version', version='1.01b')   
+    parser.add_argument('--version', action='version', version='1.01c')   
     parser.add_argument("-v", "--verbose", default=False, action="store_true",
                         help="verbose")    
     parser.add_argument("-i", "--bam", nargs="+", help="BAM file(s)")
@@ -629,7 +672,7 @@ def main():
     parser.add_argument("-o", "--outdir", required=1, help="output name")
     parser.add_argument("-w", "--windowSize", nargs="+", default=[100, 50, 20, 10], type=int,
                         help="window size in kb used for karyotyping [%(default)s]")
-    parser.add_argument("-z", "--windowSize2", default=[5, 10, 50, 2], type=int, nargs="+", 
+    parser.add_argument("-z", "--windowSize2", default=[5, 10, 2], type=int, nargs="+", #50,
                         help="window size in kb used for scaffolding [%(default)s]")
     parser.add_argument("-m", "--mapq", default=10, type=int,
                         help="mapping quality [%(default)s]")
@@ -645,6 +688,12 @@ def main():
     o = parser.parse_args()
     if o.verbose:
         sys.stderr.write("Options: %s\n"%str(o))
+
+    # check bam files
+    missing = [_bam for _bam in o.bam if not os.path.isfile(_bam)]
+    if missing:
+        sys.stderr.write("No such file(s): %s\n"%", ".join(missing))
+        sys.exit(1)
         
     # create outdir
     if os.path.isdir(o.outdir):
