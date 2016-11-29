@@ -19,9 +19,8 @@ from multiprocessing import Pool
 from FastaIndex import FastaIndex
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
-#from bam2scaffolds import normalize_rows, normalize_diagional
 
-transform = lambda x: np.log(np.max(x+1))-np.log(x+1)
+#transform = lambda x: np.log(np.max(x+1))-np.log(x+1)
 
 # update sys.path & environmental PATH
 root = os.path.dirname(os.path.abspath(sys.argv[0]))
@@ -103,6 +102,55 @@ def _get_samtools_proc(bam, mapq=0, regions=[], skipFlag=3980):
     proc = subprocess.Popen(args, stdout=subprocess.PIPE)
     return proc
 
+def get_window(chrom, start, length, windowSize, chr2window):
+    """Return window alignment belongs to. """
+    end = start + length
+    # get middle position
+    pos = int(start+round((end-start)/2))
+    # get window
+    window = pos / windowSize + chr2window[chrom]
+    return window
+
+def bam2array(windows, windowSize, chr2window, bam, mapq, upto=0, regions=[], verbose=1, threads=1):
+    """Return contact matrix based on BAM"""
+    arrays = [np.zeros((len(w), len(w)), dtype="float32") for w in windows]
+    i = 1
+    # init empty array
+    for _bam in bam:
+        # init samtools
+        if verbose:
+            logger(" %s"%_bam)
+        proc = _get_samtools_proc(_bam, mapq, regions)
+        # process reads from given library
+        for i, line in enumerate(proc.stdout, i):
+            if upto and i>upto:
+                break
+            if verbose and not i%1e5:
+                sys.stderr.write(" %s \r"%i)
+            # unload data
+            ref1, start1, mapq, cigar, ref2, start2, insertSize, seq = line.split('\t')[2:10]
+            start1, start2, seqlen = int(start1), int(start2), len(seq)
+            # update ref if alignment in the same chrom
+            if ref2 == "=":
+                ref2 = ref1
+            # skip if contig not present in array
+            if ref1 not in chr2window[0] or ref2 not in chr2window[0]:
+                continue
+            # get windows
+            for ii in range(len(windowSize)):
+                w1 = get_window(ref1, start1, seqlen, windowSize[ii], chr2window[ii])
+                w2 = get_window(ref2, start2, seqlen, windowSize[ii], chr2window[ii])
+                # matrix is symmetrix, so make sure to add only to one part
+                if w2 < w1:
+                    w1, w2 = w2, w1
+                # update contact array
+                arrays[ii][w1][w2] += 1
+    if verbose:
+        logger(" %s alignments parsed"%i)
+    # stop subprocess
+    proc.terminate()
+    return arrays
+    
 def _bam2array(args):
     """Parse pysam alignments and return matching windows"""
     _bam, contigs, mapq, contig2size, chr2window, minSize = args 
@@ -159,6 +207,73 @@ def bam2array_multi(windows, contig2size, chr2window, bam, mapq, upto=0,
     if verbose:
         logger(" %s alignments parsed"%i)
     return arrays
+
+def distance_func(x, a, b, maxv=float('inf')):
+    """Function to calculating distance from normalised contact frequency"""
+    #if not x: return maxv
+    return (1./(a*x)) **(1./b)
+
+def contact_func(x, a, b):
+    """Function to calculating normalised contact frequency from distance"""
+    return 1./(a * x ** b)
+    
+def estimate_distance_parameters(out, bam, mapq, contig2size, windowSize=2000, skipfirst=5, icontigs=5, upto=1e5):
+    """Return estimated parameters"""
+    logger(" Estimating distance parameters...")
+    i = 0
+    d2c = {0: []}
+    longest_contigs = sorted(contig2size, key=lambda x: contig2size[x], reverse=1)
+    maxdist = 0.75 * contig2size[longest_contigs[0]] / 1000.
+    for c in longest_contigs[:icontigs]:
+        s = contig2size[c]
+        sys.stderr.write(' %s %s bp   \r'%(c, s))
+        n = s / windowSize + 1 # since windowSize is in kb
+        positions = range(windowSize, n*windowSize, windowSize)
+        arrays = [np.zeros((n, n), dtype='float32')]
+        chr2window = [{c: 0}]
+        arrays = bam2array(arrays, [windowSize], chr2window, bam, mapq, regions=[c], upto=upto, verbose=0)
+        d = arrays[0]
+        i += d.sum()
+        d += d.T - np.diag(d.diagonal()/2)
+        #d = normalize(d) #normalize_rows(d)
+        
+        d2c[0] += [d[i][i] for i in range(d.shape[0]-1)]
+        for i in range(len(positions)-1):
+            for j in range(i, len(positions)):
+                dist = (positions[j]-positions[i]) / 1000 
+                if dist not in d2c:
+                    d2c[dist] = []
+                d2c[dist].append(d[i][j])
+
+    # plot up to 0.75x max dist
+    dists = np.array([d for d in sorted(d2c)[:30] if d<maxdist])
+    contacts = [d2c[d] for d in dists]
+    
+    plt.figure()
+    plt.title("Normalised HiC contacts vs distance")
+    plt.boxplot(contacts, 1, '', positions=dists, widths=.75*dists[1])
+    plt.xticks(rotation=90)
+
+    plt.xlabel("Genomic distance [kb]")
+    plt.ylabel("Normalised contacts")
+    plt.xlim(xmin=-dists[1])
+    plt.ylim(ymin=0)
+
+    x = dists
+    yn = np.array([np.median(c) for c in contacts])
+    step = dists[1]/4.
+    xs = np.arange(0, max(x)+step, step)
+
+    params, pcov = curve_fit(contact_func, x[skipfirst:], yn[skipfirst:])
+    plt.plot(xs[1:], contact_func(xs[1:], *params), 'r-', label="Fit\n$ y = 1 / {%0.2f x^ {%0.2f}} $"%tuple(params))
+
+    outfn1, outfn2 = out+".distance_fit.png", out+".distance_fit.zoom.png"
+    plt.legend(fancybox=True, shadow=True)
+    plt.savefig(outfn1)
+    plt.ylim(ymin=0, ymax=yn[0]/30.)
+    plt.savefig(outfn2)
+    logger("  fit stored as %s"%outfn1)
+    return params
     
 def getNewick(node, newick, parentdist, leaf_names):
     if node.is_leaf():
@@ -172,30 +287,6 @@ def getNewick(node, newick, parentdist, leaf_names):
         newick = getNewick(node.get_right(), ",%s" % (newick), node.dist, leaf_names)
         newick = "(%s" % (newick)
         return newick
-    
-def distance_matrix2tree(Z, names):
-    """Return tree representation for distance matrix"""
-    n = Z.shape[0]+1
-    i2n = [0] * (2*n - 1)
-    t = ete3.Tree()
-    for i, (idx1, idx2, dist, sample_count) in enumerate(Z):
-        idx1, idx2 = int(idx1), int(idx2)
-        # create Tree object for tips / leaves
-        if idx1 < n:
-            i2n[idx1] = ete3.Tree(name=names[idx1])
-        if idx2 < n:
-            i2n[idx2] = ete3.Tree(name=names[idx2])
-        # create new node
-        t = ete3.Tree()
-        # normalise distance
-        dist1 = dist - i2n[idx1].get_farthest_leaf()[1]
-        dist2 = dist - i2n[idx2].get_farthest_leaf()[1]
-        # add children
-        t.add_child(i2n[idx1], dist=dist1)
-        t.add_child(i2n[idx2], dist=dist2)
-        # store
-        i2n[n + i] = t
-    return t
 
 def mylayout(node):
     # don't show circles
@@ -208,14 +299,9 @@ def mylayout(node):
         
 def array2tree(d, names, outbase="", method="ward"):
     """Return tree representation for array"""
-    '''# cluster
-    Z = sch.linkage(d[np.triu_indices(d.shape[0], 1)], method=method)
-    t = distance_matrix2tree(Z, names); print len(set(t.get_leaf_names())), len(names)
-    '''
     Z = fastcluster.linkage(d[np.triu_indices(d.shape[0], 1)], method=method)
     tree = sch.to_tree(Z, False)
     t = ete3.Tree(getNewick(tree, "", tree.dist, names))
-    #'''
     # save tree & newick
     if outbase:
         pdf, nw = outbase+".nw.pdf", outbase+".nw"
@@ -229,7 +315,7 @@ def array2tree(d, names, outbase="", method="ward"):
         
     return t
     
-def get_longest(t, maxdist=6, k=2.0):
+def get_longest(t, maxdist=5, k=2.0):
     """Return node having longest branch
     THIS CAN BE FASTER DEFINITELY!
     """
@@ -247,7 +333,7 @@ def get_longest(t, maxdist=6, k=2.0):
 def get_name(contig):
     return contig.split()[0].split('|')[-1].split('.')[0]
     
-def report_tree(nw, fasta, mind=3, maxd=5):
+def report_tree(nw, fasta, mind=3, maxd=7):
     """Save tree pdf"""
     # load contig2chrom
     c2chr = {}
@@ -271,18 +357,17 @@ def report_tree(nw, fasta, mind=3, maxd=5):
     ts.layout_fn = mylayout
     t.render('truncated.tree.pdf', tree_style=ts)
     
-def get_subtrees(d, bin_chr, bin_position, method="ward", nchrom=1000, distfrac=0.4, fasta=""):
+def get_subtrees(d, bin_chr, bin_position, method="ward", nchrom=1000, distfrac=0.75, fasta=""):
     """Return contings clustered into scaffolds
     fastcluster is slightly faster than scipy.cluster.hierarchy and solve the issue: http://stackoverflow.com/a/40738977/632242
     """
     subtrees = [] 
     i = maxtdist = 0
     t = array2tree(d, bin_chr)#, "clustering.tree")
+    tname, maxtdist = t.get_farthest_leaf()
     report_tree(t.write(), fasta)
     for i in range(1, nchrom):
         tname, tdist = t.get_farthest_leaf()
-        if maxtdist < tdist:
-            maxtdist = tdist
         # get longest branch
         n, bestdist = get_longest(t)
         # break if small subtree
@@ -290,6 +375,7 @@ def get_subtrees(d, bin_chr, bin_position, method="ward", nchrom=1000, distfrac=
             break
         # store cluster
         subtrees.append(n.get_leaf_names())
+        print "%s\t%s / %s\t%5.2f %5.2f %5.2f"%(i, len(n), len(t), tdist, maxtdist, bestdist)
         # prune tree
         # removing child is much faster than pruning and faster than recomputing matrix
         ancestors = n.get_ancestors()
@@ -306,15 +392,16 @@ def get_subtrees(d, bin_chr, bin_position, method="ward", nchrom=1000, distfrac=
             p2.add_child(n2, dist=n2.dist+p.dist)
     if i:    
         subtrees.append(t.get_leaf_names())
+        print "%s\t%s / %s\t%5.2f %5.2f %5.2f"%(i, len(n), len(t), tdist, maxtdist, bestdist)
     return subtrees
 
 def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, upto=0, verbose=1, method="ward"):
     """Return clusters computed from from windowSizes"""
-    logger("=== Clustering ==="); print minSize, threads
+    logger("=== Clustering ===")
     outbase = os.path.join(outdir, "auto")
     
     # load clusters
-    fname = outbase + ".clusters.tab_"
+    fname = outbase + ".clusters.tab"
     if os.path.isfile(fname):
         clusters = [l[:-1].split('\t') for l in open(fname)]
         logger("  %s clusters loaded."%len(clusters))
@@ -322,7 +409,7 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
 
     # get windows
     windows, chr2window, contig2size = contigs2windows(fasta, minSize, verbose)
-        
+    
     # generate missing handles
     bin_chr, bin_position = [], []
     for c, s, e in windows:
@@ -354,18 +441,15 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
             np.savez_compressed(out, d)'''
     # load from file
     else:
-        npy = np.load(outbase+".npz") #balanced.
+        npy = np.load(outbase+".npz")
         d = npy[npy.files[0]]
-        
-    logger("Balancing array...")
-    d = normalize(d, 1)
-    #d, bin_chr, bin_position = normalize_diagional(d, bin_chr, bin_position)
-    #d, bin_chr, bin_position = normalize_window_size(d, bin_chr, bin_position, _windowSize)
-    
+            
     # get clusters on transformed matrix
-    logger("Clustering..."); print d.max(), d.mean(), method
+    logger("Clustering...")
+    params = estimate_distance_parameters(outbase, bam, mapq, contig2size)
+    transform = lambda x: distance_func(x+1, *params)
     clusters = get_subtrees(transform(d), bin_chr, bin_position, method, fasta=fasta)
-
+    
     # skip empty clusters
     clusters = filter(lambda x: x, clusters)
     totsize = contigs = 0
@@ -380,13 +464,13 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
     logger("  %3s bp in %s clusters generated from %s contigs."%(totsize, len(clusters), contigs))
     
     return clusters
-
+    
 def main():
     import argparse
     usage   = "%(prog)s -v" #usage=usage, 
     parser  = argparse.ArgumentParser(description=desc, epilog=epilog, \
                                       formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('--version', action='version', version='1.01d')   
+    parser.add_argument('--version', action='version', version='1.01e')   
     parser.add_argument("-v", "--verbose", default=False, action="store_true",
                         help="verbose")    
     parser.add_argument("-i", "--bam", nargs="+", help="BAM file(s)")

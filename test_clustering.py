@@ -192,7 +192,7 @@ def load_matrix(fname, chrs=[], remove_shorter=True, scaffolds=[], verbose=0, re
     #d, bin_chr, bin_position = normalize(d, bin_chr, bin_position)
     #d, bin_chr, bin_position = normalize_average(d, bin_chr, bin_position)
     #d = normalize_rows(d)
-    d, bin_chr, bin_position = normalize_window_size(d, bin_chr, bin_position)#, 2000)
+    #d, bin_chr, bin_position = normalize_window_size(d, bin_chr, bin_position)#, 2000)
     
     return d, bin_chr, bin_position, contig2size
 
@@ -249,7 +249,7 @@ def get_names(bin_chr, bin_position):
     return ["%s %s"%(get_name(c), s) for c, (s, e) in zip(bin_chr, bin_position)]
 
 def get_name(contig):
-    return contig.split()[0].split('|')[-1]
+    return contig.split()[0].split('|')[-1].split('|')[0]
     
 def get_chr_name(n):
     return n.split()[0].split(".")[0]
@@ -455,10 +455,15 @@ def main(fn='/home/lpryszcz/cluster/hic/arath/_archives/snap/SRR2626163.100k.npz
     logger("  %3s bp in %s clusters generated from %s contigs."%(totsize, len(clusters), totwindows))
                 
 def test(bam=["/mnt/data/lpryszcz/cluster/hic/arath/idba/SRR2626163.contig.fa.bam"], fasta="/mnt/data/lpryszcz/cluster/hic/arath/idba/SRR2626163.contig.fa", outdir="/mnt/data/lpryszcz/cluster/hic/arath/idba/bam2scaffolds.v01d", ref="/mnt/data/lpryszcz/cluster/hic/arath/ref/Ath.fa", minSize=2000):
+
+    if not os.path.isdir(outdir):
+        os.makedirs(outdir)
+    
     if len(sys.argv)>4:
         bam, fasta, outdir, ref = sys.argv[1:5]
         bam = [bam]
     clusters = bam2clusters(bam, fasta, outdir, minSize=minSize)
+    
     
     # generate & load contig2chrom
     if not os.path.isfile("%s.bed"%fasta):

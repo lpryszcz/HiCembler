@@ -168,76 +168,83 @@ def normalize(d):
     d = sk.fit(d)
     return d
 
-bam = ["/home/lpryszcz/cluster/hic/arath/platanus/ARATH.d05.l100_contig.fa.bam"]
-windowSize = 2000
-if len(sys.argv)>1: windowSize = int(sys.argv[1])
-mapq = 0
-d2c[0] = []
+def main(bam, windowSize=2000, mapq=0):
+    d2c[0] = []
 
-print "Loading..."
-sam = pysam.Samfile(bam[0])
-contig2size = {c: s for c, s in zip(sam.references, sam.lengths)}
-# estimate on largest contigs
-longest_contigs = sorted(contig2size, key=lambda x: contig2size[x], reverse=1)
-#c = longest_contigs[0]
-for c in longest_contigs[:25]:
-  s = contig2size[c]
-  sys.stderr.write(' %s %s bp   \r'%(c, s))
-  n = s / windowSize + 1
-  positions = range(windowSize, n*windowSize, windowSize)
-  arrays = [np.zeros((n,n), dtype='float32')]
-  chr2window = [{c: 0}]
-  arrays = bam2array(arrays, [windowSize], chr2window, bam, mapq, regions=[c], upto=1e6, verbose=0)
-  d = arrays[0]#; print c, len(positions), s, d.shape
-  
-  d += d.T
-  d -= np.diag(d.diagonal()/2)
-  d = normalize(d) #normalize_rows(d)
+    print "Loading..."
+    sam = pysam.Samfile(bam)
+    contig2size = {c: s for c, s in zip(sam.references, sam.lengths)}
+    # estimate on largest contigs
+    longest_contigs = sorted(contig2size, key=lambda x: contig2size[x], reverse=1)
+    #c = longest_contigs[0]
+    for c in longest_contigs[:5]:
+      s = contig2size[c]
+      sys.stderr.write(' %s %s bp   \r'%(c, s))
+      n = s / windowSize + 1
+      positions = range(windowSize, n*windowSize, windowSize)
+      arrays = [np.zeros((n,n), dtype='float32')]
+      chr2window = [{c: 0}]
+      arrays = bam2array(arrays, [windowSize], chr2window, [bam], mapq, regions=[c], upto=1e6, verbose=0)
+      d = arrays[0]#; print c, len(positions), s, d.shape
+      
+      d += d.T
+      d -= np.diag(d.diagonal()/2)
+      d = normalize(d) #normalize_rows(d)
 
-  d2c[0] += [d[i][i] for i in range(d.shape[0]-1)]
-  for i in range(len(positions)-1):
-    for j in range(i, len(positions)):
-      dist = (positions[j]-positions[i]) / 1000
-      if dist not in d2c:
-        d2c[dist] = []
-      d2c[dist].append(d[i][j])
-#'''
+      d2c[0] += [d[i][i] for i in range(d.shape[0]-1)]
+      for i in range(len(positions)-1):
+        for j in range(i, len(positions)):
+          dist = (positions[j]-positions[i]) / 1000
+          if dist not in d2c:
+            d2c[dist] = []
+          d2c[dist].append(d[i][j])
+    #'''
 
-dists = np.array(sorted(d2c)[:50])
-contacts = [d2c[d] for d in dists]
+    dists = np.array(sorted(d2c)[:50])
+    contacts = [d2c[d] for d in dists]
 
-print "Plotting %s distances..."%len(contacts)
-plt.title("HiC contacts at given distance")
-plt.boxplot(contacts, 1, '', positions=dists, widths=.75*dists[1])#; plt.legend("HiC data")
-plt.xticks(rotation=90)
+    print "Plotting %s distances..."%len(contacts)
+    plt.title("HiC contacts at given distance")
+    plt.boxplot(contacts, 1, '', positions=dists, widths=.75*dists[1])#; plt.legend("HiC data")
+    plt.xticks(rotation=90)
 
-plt.xlabel("distance [kb]")
-plt.ylabel("contacts")
-plt.xlim(xmin=-dists[1])
-plt.ylim(ymin=0)#, ymax=20)
-#plt.yscale('log')
+    plt.xlabel("distance [kb]")
+    plt.ylabel("contacts")
+    plt.xlim(xmin=-dists[1])
+    plt.ylim(ymin=0)#, ymax=20)
+    #plt.yscale('log')
 
-print "fitting curve..." # http://stackoverflow.com/a/11209147/632242
-x = dists; yn = np.array([np.median(c) for c in contacts])#, dtype='double') [2:]
+    print "fitting curve..." # http://stackoverflow.com/a/11209147/632242
+    x = dists; yn = np.array([np.median(c) for c in contacts])#, dtype='double') [2:]
 
-step = dists[1]/4.
-xs = np.arange(0, max(x)+step, step)
-# Non-linear fit
-#def func(x, b, c, d): return np.exp(-b * x) / c + 1 / (d*x)
-def func(x, d, e): return 1 / (d*x**e)
-#def func(x, d): return 1 / (d*x)
-popt, pcov = curve_fit(func, x[5:], yn[5:])#maxfev=1000; print popt, pcov
-plt.plot(xs[1:], func(xs[1:], *popt), 'r-', label="Non-linear fit\n$ 1 / {%0.2f x^ {%0.2f}} $"%tuple(popt))
+    step = dists[1]/4.
+    xs = np.arange(0, max(x)+step, step)
+    # Non-linear fit
+    #def func(x, b, c, d): return np.exp(-b * x) / c + 1 / (d*x)
+    def func(x, d, e): return 1 / (d*x**e)
+    #def func(x, d): return 1 / (d*x)
+    popt, pcov = curve_fit(func, x[5:], yn[5:]); print pcov
+    plt.plot(xs[1:], func(xs[1:], *popt), 'r-', label="Non-linear fit\n$ 1 / {%0.2f x^ {%0.2f}} $"%tuple(popt))
 
-def ddd(x, b, c): return np.exp(-b * x) / c 
-#def ddd(x, b, c, d): return np.exp(-b * x) / c + d
-# def ddd(x, b, c, d): return np.exp(-b * x) / c + 1 / d
-popt2, pcov2 = curve_fit(ddd, x, yn)#; print popt, pcov
-plt.plot(xs, ddd(xs, *popt2), 'b--', label="Distance dependent decay\n$ y = e^{-%0.2f x} / %0.5f $"%tuple(popt2))
+    def ddd(x, b, c): return np.exp(-b * x) / c 
+    #def ddd(x, b, c, d): return np.exp(-b * x) / c + d
+    # def ddd(x, b, c, d): return np.exp(-b * x) / c + 1 / d
+    popt2, pcov2 = curve_fit(ddd, x, yn); print pcov2
+    plt.plot(xs, ddd(xs, *popt2), 'b--', label="Distance dependent decay\n$ y = e^{-%0.2f x} / %0.5f $"%tuple(popt2))
 
-plt.legend(fancybox=True, shadow=True)
-plt.savefig("test_gapsize.fit.png")
-plt.ylim(ymin=0, ymax=yn[0]/30.)
-plt.savefig("test_gapsize.fit.zoom.png")
-dt = datetime.now() - t0; print dt
+    plt.legend(fancybox=True, shadow=True)
+    plt.savefig(bam+".fit.png")
+    plt.ylim(ymin=0, ymax=yn[0]/30.)
+    plt.savefig(bam+".fit.zoom.png")
+    dt = datetime.now() - t0; print dt
+    
+if __name__=='__main__':
+    bam = "/home/lpryszcz/cluster/hic/arath/platanus/ARATH.d05.l100_contig.fa.bam"
+    windowSize = 2000
+    if len(sys.argv)>1: 
+        bam = sys.argv[1]
+    if len(sys.argv)>2: 
+        windowSize = int(sys.argv[2])
+    main(bam, windowSize)
+
 

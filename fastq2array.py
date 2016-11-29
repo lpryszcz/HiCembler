@@ -194,7 +194,7 @@ def sam2array(a, windowSize, chr2window, outfn, fq1, fq2, ref, cores, mapq, upto
     proc.terminate()
     return a
 
-def plot(outfn, a, genomeSize, base2chr, _windowSize, dpi=300):
+def plot(outfn, a, genomeSize, base2chr, _windowSize, dpi=300, ext="svg"):
     """Save contact plot"""
     
     def format_fn(tick_val, tick_pos):
@@ -224,7 +224,7 @@ def plot(outfn, a, genomeSize, base2chr, _windowSize, dpi=300):
     plt.imshow(a+1, cmap=cm.hot, norm=LogNorm(), extent=(0, genomeSize, 0, genomeSize))# 
     plt.colorbar()
     # save
-    fig.savefig(outfn+".svg", dpi=dpi, papertype="a4")
+    fig.savefig("%s.%s"%(outfn,ext), dpi=dpi, papertype="a4")
 
 def fastq2array(fasta, fastq, outfn, windowSize, mapq=10, cores=1,
                 upto=float('inf'), dpi=300, dtype='float32', verbose=1):

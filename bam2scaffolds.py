@@ -19,7 +19,8 @@ from FastaIndex import FastaIndex
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 
-from bam2clusters import logger, transform, normalize, array2tree, bam2clusters, _get_samtools_proc
+from bam2clusters import logger, normalize, array2tree, bam2clusters, bam2array, _get_samtools_proc, \
+     estimate_distance_parameters, contact_func, distance_func
 
 def normalize_window_size(d, bin_chr, bin_position, windowSize=0):
     """Return symmetric and normalised matrix by window size"""
@@ -119,55 +120,6 @@ def fasta2windows(fasta, windowSize, verbose, skipShorter=1, minSize=2000,
             logger('  %s bases in %s contigs skipped.'%(sum(skipped), len(skipped)))
     return windowSize, windows, chr2window, base2chr, faidx.genomeSize
 
-def get_window(chrom, start, length, windowSize, chr2window):
-    """Return window alignment belongs to. """
-    end = start + length
-    # get middle position
-    pos = int(start+round((end-start)/2))
-    # get window
-    window = pos / windowSize + chr2window[chrom]
-    return window
-
-def bam2array(windows, windowSize, chr2window, bam, mapq, upto=0, regions=[], verbose=1, threads=1):
-    """Return contact matrix based on BAM"""
-    arrays = [np.zeros((len(w), len(w)), dtype="float32") for w in windows]
-    i = 1
-    # init empty array
-    for _bam in bam:
-        # init samtools
-        if verbose:
-            logger(" %s"%_bam)
-        proc = _get_samtools_proc(_bam, mapq, regions)
-        # process reads from given library
-        for i, line in enumerate(proc.stdout, i):
-            if upto and i>upto:
-                break
-            if verbose and not i%1e5:
-                sys.stderr.write(" %s \r"%i)
-            # unload data
-            ref1, start1, mapq, cigar, ref2, start2, insertSize, seq = line.split('\t')[2:10]
-            start1, start2, seqlen = int(start1), int(start2), len(seq)
-            # update ref if alignment in the same chrom
-            if ref2 == "=":
-                ref2 = ref1
-            # skip if contig not present in array
-            if ref1 not in chr2window[0] or ref2 not in chr2window[0]:
-                continue
-            # get windows
-            for ii in range(len(windowSize)):
-                w1 = get_window(ref1, start1, seqlen, windowSize[ii], chr2window[ii])
-                w2 = get_window(ref2, start2, seqlen, windowSize[ii], chr2window[ii])
-                # matrix is symmetrix, so make sure to add only to one part
-                if w2 < w1:
-                    w1, w2 = w2, w1
-                # update contact array
-                arrays[ii][w1][w2] += 1
-    if verbose:
-        logger(" %s alignments parsed"%i)
-    # stop subprocess
-    proc.terminate()
-    return arrays
-    
 def get_reversed(scaffold):
     """Return reversed scaffold, updating orientation"""
     return [(name, not orientation) for name, orientation in reversed(scaffold)]
@@ -243,7 +195,39 @@ def tree2scaffold(t, d, bin_chr, bin_position, minWindows):
         n.scaffold = join_scaffolds(n1.scaffold, n2.scaffold, d, contig2indices, minWindows)
 
     return t.scaffold
-
+        
+def scaffold2gaps(d, bin_chr, scaffold, params, fasta, mingap=100, maxgap=1000000, gapfrac=1.5):
+    """Add gaps to scaffolds
+    Here, there may be some smarter way of doing it using ML and all contig contacts at the same time. 
+    """
+    faidx = FastaIndex(fasta)
+    contig2size = {c: stats[0] for c, stats in faidx.id2stats.iteritems()}
+    contig2indices = get_contig2indices(bin_chr)
+    scaffold_with_gaps = []
+    contigbp = gapbp = 0
+    for i, (c, o) in enumerate(scaffold[:-1]):
+        c2, o2 = scaffold[i+1]
+        csize, c2size = contig2size[c], contig2size[c2]
+        contacts = d[contig2indices[c][0],contig2indices[c2][0]]
+        distance = distance_func(contacts, *params)*1000
+        gapSize = distance - contig2size[c]/2 - contig2size[c2]/2
+        if gapSize < mingap:
+            gapSize = mingap
+        elif gapSize > gapfrac * (contig2size[c] + contig2size[c2]):
+            gapSize = gapfrac * (contig2size[c] + contig2size[c2])
+        if gapSize > maxgap:
+            gapSize = maxgap
+        # round to int
+        gapSize = int(round(gapSize))
+        contigbp += csize
+        gapbp += gapSize
+        scaffold_with_gaps.append((c, o, gapSize))#; print gapSize, csize, c2size, distance
+    # add last contig without gap
+    c, o = scaffold[-1]
+    scaffold_with_gaps.append((c, o, 0))
+    #sys.exit()
+    return scaffold_with_gaps, contigbp, gapbp
+    
 def contigs2scaffold(args):
     """Combine contigs into scaffold"""
     i, bam, fasta, windowSize, contigs, mapq, minWindows, params = args
@@ -272,131 +256,24 @@ def contigs2scaffold(args):
         return [(bin_chr[0], 0, 0)]
         
     # make symmetric & normalise
-    d += d.T
-    d -= np.diag(d.diagonal()/2)
-    #d = normalize_rows(d)
+    d += d.T - np.diag(d.diagonal())
 
     # get tree on reduced matrix
-    t = array2tree(transform(_average_reduce_2d(d, bin_chr)), np.unique(bin_chr))#, "tree_%s"%i)
+    transform = lambda x: distance_func(x+1, *params)
+    t = array2tree(transform(_average_reduce_2d(d, bin_chr)), np.unique(bin_chr))
     
     # get scaffold
     scaffold = tree2scaffold(t, d, bin_chr, bin_position, minWindows)
     
     # estimate & add gaps
     #scaffold = [(c, o, 1) for c, o in scaffold]; return scaffold
-    scaffold, contigbp, gapbp = scaffold2gaps(normalize(_average_reduce_2d(d, bin_chr)), np.unique(bin_chr), scaffold, params, fasta)
+    scaffold, contigbp, gapbp = scaffold2gaps(_average_reduce_2d(d, bin_chr), np.unique(bin_chr), scaffold, params, fasta)
     
     info = " cluster_%s with %s windows for %s out of %s contigs; %s bp in gaps [%2.2f%s]"
     logger(info%(i, d.shape[0], len(np.unique(bin_chr)), len(contigs), gapbp, 100.*gapbp/contigbp, '%'))
 
     return scaffold
 
-def scaffold2gaps(d, bin_chr, scaffold, params, fasta, mingap=100, maxgap=1000000, gapfrac=1.5):
-    """Add gaps to scaffolds
-    Here, there may be some smarter way of doing it using ML and all contig contacts at the same time. 
-    """
-    faidx = FastaIndex(fasta)
-    contig2size = {c: stats[0] for c, stats in faidx.id2stats.iteritems()}
-    contig2indices = get_contig2indices(bin_chr)
-    scaffold_with_gaps = []
-    contigbp = gapbp = 0
-    for i, (c, o) in enumerate(scaffold[:-1]):
-        c2, o2 = scaffold[i+1]
-        csize, c2size = contig2size[c], contig2size[c2]
-        '''
-        contacts = d[contig2indices[c]][:, contig2indices[c2]].reshape(len(contig2indices[c])*len(contig2indices[c2]))
-        distances = [distance_func(_c, *params) for _c in contacts] # skip outliers ie 0.9 percentile
-        gapSize = int(np.median(distances)*1000 - contig2size[c]/2 - contig2size[c2]/2)
-        print gapSize, csize, c2size, distance, np.median(distances), np.mean(distances), np.std(distances), distances'''
-        contacts = d[contig2indices[c][0],contig2indices[c2][0]]
-        distance = distance_func(contacts, *params)*1000
-        gapSize = distance - contig2size[c]/2 - contig2size[c2]/2
-        if gapSize < mingap:
-            gapSize = mingap
-        elif gapSize > gapfrac * (contig2size[c] + contig2size[c2]):
-            gapSize = gapfrac * (contig2size[c] + contig2size[c2])
-        if gapSize > maxgap:
-            gapSize = maxgap
-        # round to int
-        gapSize = int(round(gapSize))
-        contigbp += csize
-        gapbp += gapSize
-        scaffold_with_gaps.append((c, o, gapSize))#; print gapSize, csize, c2size, distance
-    # add last contig without gap
-    c, o = scaffold[-1]
-    scaffold_with_gaps.append((c, o, 0))
-    #sys.exit()
-    return scaffold_with_gaps, contigbp, gapbp
-
-def distance_func(x, a, b):
-    """Function to calculating distance from normalised contact frequency"""
-    return (1./(a*x)) **(1./b)
-    
-def contact_func(x, a, b):
-    """Function to calculating normalised contact frequency from distance"""
-    return 1./(a * x ** b)
-
-def estimate_distance_parameters(out, bam, mapq, contig2size, windowSize=10, skipfirst=5, icontigs=25, upto=1e5):
-    """Return estimated parameters"""
-    logger(" Estimating distance parameters...")
-    i = 0
-    d2c = {0: []}
-    longest_contigs = sorted(contig2size, key=lambda x: contig2size[x], reverse=1)
-    maxdist = 0.75 * contig2size[longest_contigs[0]] / 1000.
-    for c in longest_contigs[:icontigs]:
-        s = contig2size[c]
-        sys.stderr.write(' %s %s bp   \r'%(c, s))
-        n = s / windowSize + 1 # since windowSize is in kb
-        positions = range(windowSize, n*windowSize, windowSize)
-        arrays = [np.zeros((n, n), dtype='float32')]
-        chr2window = [{c: 0}]
-        arrays = bam2array(arrays, [windowSize], chr2window, bam, mapq, regions=[c], upto=upto, verbose=0)
-        d = arrays[0]
-        i += d.sum()
-        d += d.T
-        d -= np.diag(d.diagonal()/2)
-        d = normalize(d) #normalize_rows(d)
-        
-        d2c[0] += [d[i][i] for i in range(d.shape[0]-1)]
-        for i in range(len(positions)-1):
-            for j in range(i, len(positions)):
-                dist = (positions[j]-positions[i]) / 1000 
-                if dist not in d2c:
-                    d2c[dist] = []
-                d2c[dist].append(d[i][j])
-        if i>upto:
-            break
-
-    # plot up to 0.75x max dist
-    dists = np.array([d for d in sorted(d2c)[:30] if d<maxdist])
-    contacts = [d2c[d] for d in dists]
-    
-    plt.figure()
-    plt.title("Normalised HiC contacts vs distance")
-    plt.boxplot(contacts, 1, '', positions=dists, widths=.75*dists[1])
-    plt.xticks(rotation=90)
-
-    plt.xlabel("Genomic distance [kb]")
-    plt.ylabel("Normalised contacts")
-    plt.xlim(xmin=-dists[1])
-    plt.ylim(ymin=0)
-
-    x = dists
-    yn = np.array([np.median(c) for c in contacts])
-    step = dists[1]/4.
-    xs = np.arange(0, max(x)+step, step)
-
-    params, pcov = curve_fit(contact_func, x[skipfirst:], yn[skipfirst:])
-    plt.plot(xs[1:], contact_func(xs[1:], *params), 'r-', label="Fit\n$ y = 1 / {%0.2f x^ {%0.2f}} $"%tuple(params))
-
-    outfn1, outfn2 = out+".distance_fit.png", out+".distance_fit.zoom.png"
-    plt.legend(fancybox=True, shadow=True)
-    plt.savefig(outfn1)
-    plt.ylim(ymin=0, ymax=yn[0]/30.)
-    plt.savefig(outfn2)
-    logger("  fit stored as %s"%outfn1)
-    return params
-    
 def get_scaffolds(out, bam, fasta, clusters, mapq, minWindows, threads, verbose, windowSize=10):
     """Return scaffolds"""
     scaffolds = []
@@ -404,7 +281,7 @@ def get_scaffolds(out, bam, fasta, clusters, mapq, minWindows, threads, verbose,
     contig2size = {c: stats[0] for c, stats in faidx.id2stats.iteritems()}
     
     # estimate distance parameters
-    params = estimate_distance_parameters(out, bam, mapq, contig2size, windowSize*1000)
+    params = estimate_distance_parameters(out, bam, mapq, contig2size)#, windowSize*1000)
     # 
     if threads > 1:
         p = Pool(threads)
@@ -443,7 +320,7 @@ def report_scaffolds(outbase, scaffolds, faidx, w=60):
             outscaffolds.write("%s\n"%"\t".join(elements))
             totsize += len(seq)
     logger(" %s in %s scaffolds reported to %s"%(totsize, len(scaffolds), fastafn))
-    return fastafn 
+    return fastafn
     
 def bam2scaffolds(bam, fasta, outdir, minSize, windowSize2, mapq, threads, dpi, upto, minWindows, verbose):
     """Report scaffolds based on BAM file"""
@@ -469,7 +346,7 @@ def main():
     usage   = "%(prog)s -v" #usage=usage, 
     parser  = argparse.ArgumentParser(description=desc, epilog=epilog, \
                                       formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('--version', action='version', version='1.01d')   
+    parser.add_argument('--version', action='version', version='1.01e')   
     parser.add_argument("-v", "--verbose", default=False, action="store_true",
                         help="verbose")    
     parser.add_argument("-i", "--bam", nargs="+", help="BAM file(s)")
