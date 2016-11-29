@@ -44,15 +44,33 @@ def normalize(d, bin_chr, bin_position, max_iter=1000, epsilon=0.0001, windowSiz
     #sk = sinkhorn_knopp.SinkhornKnopp(max_iter=1); d += 1; d /= d.max(); d = sk.fit(d)
     '''
     axis = 1; d *= 1. * d.sum(axis=axis).max() / d.sum(axis=axis); print "axis %s norm"%axis #normalize_rows(d)
-    ''' # diagonal mean normalisation
-    # normalize_rows(d)
-    '''
-    indices = d.diagonal()!=0; print "diag norm"
+    ''' 
+    return d, bin_chr, bin_position
+
+def normalize_diagonal(d, bin_chr, bin_position):
+    """Return symmetric and fully balanced matrix using SinkhornKnopp"""
+    # make symmetric & normalise
+    d += d.T
+    d -= np.diag(d.diagonal()/2)
+    # diagonal mean normalisation
+    indices = d.diagonal()!=0; print "diag norm 2"
     d = d[indices, :]
     d = d[:, indices]
     bin_chr = bin_chr[indices]
     bin_position = bin_position[indices, :]    
-    d *= np.mean(d.diagonal()) / d.diagonal() #'''
+    n2 = np.mean(d.diagonal()) / d.diagonal()
+    d = (d*n2).T*n2 
+    return d, bin_chr, bin_position
+
+def normalize_average(d, bin_chr, bin_position):
+    """Return symmetric and fully balanced matrix using SinkhornKnopp"""
+    # make symmetric & normalise
+    d += d.T
+    d -= np.diag(d.diagonal()/2)
+    # diagonal mean normalisation
+    print "diag average"
+    n = d.sum(axis=0).max() / d.sum(axis=0)
+    d = (d*n).T*n #/ d.max()
     return d, bin_chr, bin_position
 
 def get_contig2size(bin_chr, bin_position):
@@ -80,7 +98,10 @@ def load_matrix(fname, chrs=[], remove_shorter=True, scaffolds=[], verbose=0, re
     d = npy[npy.files[0]]
     
     # load windows
-    windowfn = fname[:-4]+'.windows.tab.gz' 
+    if fname.endswith('.balanced.npz'):
+        windowfn = fname[:-13]+'.windows.tab.gz' 
+    else:
+        windowfn = fname[:-4]+'.windows.tab.gz' 
     bin_chr = []
     bin_position = [] 
     for i, l in enumerate(gzip.open(windowfn)):
@@ -152,8 +173,9 @@ def load_matrix(fname, chrs=[], remove_shorter=True, scaffolds=[], verbose=0, re
         bin_position = np.array(bin_position)
         contig2size = get_contig2size(bin_chr, bin_position)
     
-    d, bin_chr, bin_position = normalize(d, bin_chr, bin_position)
-            
+    #d, bin_chr, bin_position = normalize(d, bin_chr, bin_position)
+    #d, bin_chr, bin_position = normalize_diagonal(d, bin_chr, bin_position)
+           
     return d, bin_chr, bin_position, contig2size
 
 def get_names(bin_chr, bin_position):

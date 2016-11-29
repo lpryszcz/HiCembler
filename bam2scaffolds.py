@@ -3,51 +3,31 @@ desc="""Report scaffolds by joining contigs based on contact matrix from BAM fil
 
 TBD:
 - allow for fitting contig into gap within large contig?
-- distance estimation?
-- remove fastq2array and array2scaffolds imports
 """
 epilog="""Author: l.p.pryszcz+git@gmail.com
 Bratislava, 27/10/2016
 """
 
-import ete3, glob, gzip, os, pysam, resource, subprocess, sys
+import ete3, glob, gzip, os, resource, subprocess, sys
 import scipy.cluster.hierarchy as sch
 import fastcluster
 import numpy as np
 from collections import Counter
 from datetime import datetime
 from multiprocessing import Pool
-from fastq2array import logger, fasta2windows, get_window, plot
-from array2scaffolds import transform, normalize_rows, get_name, get_clusters, array2tree, _average_reduce_2d, report_scaffolds, getNewick
 from FastaIndex import FastaIndex
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 
-# update sys.path & environmental PATH
-root = os.path.dirname(os.path.abspath(sys.argv[0]))
-src = ["bin", "bin/snap", "bin/sinkhorn_knopp"]
-paths = [os.path.join(root, p) for p in src]
-sys.path = paths + sys.path
-os.environ["PATH"] = "%s:%s"%(':'.join(paths), os.environ["PATH"])
-
-from sinkhorn_knopp import sinkhorn_knopp
-
-def normalize(d, max_iter=1000, epsilon=0.00001):
-    """Return fully balanced matrix"""
-    sk = sinkhorn_knopp.SinkhornKnopp(max_iter=max_iter, epsilon=epsilon)
-    # make symmetric & normalise
-    d += d.T
-    d -= np.diag(d.diagonal()/2)
-    d += 1
-    d = sk.fit(d) * 1000
-    return d
+from bam2clusters import logger, transform, normalize, array2tree, bam2clusters, _get_samtools_proc
 
 def normalize_window_size(d, bin_chr, bin_position, windowSize=0):
     """Return symmetric and normalised matrix by window size"""
+    logger("Window-size normalisation...")
     # make symmetric & normalise
     d += d.T
     d -= np.diag(d.diagonal()/2)
-    return d, bin_chr, bin_position
+    #return d, bin_chr, bin_position
     # normalize by windows size
     sizes = np.diff(bin_position, axis=1)#[:, 0]
     if not windowSize:
@@ -56,34 +36,99 @@ def normalize_window_size(d, bin_chr, bin_position, windowSize=0):
     d *= 1. * windowSize **2 / (sizes*sizes.T)
     return d, bin_chr, bin_position    
 
-def normalize_diagional(d, bin_chr, bin_position):
-    """Return symmetric and diagonal normalised matrix"""
-    #logger("Diagonal normalisation...")    
-    # skip rows/columns with zero diagonal
-    indices = d.diagonal()!=0
-    d = d[indices, :]
-    d = d[:, indices]
-    bin_chr = bin_chr[indices]
-    bin_position = bin_position[indices, :]
-    # make symmetric & normalise
-    d += d.T
-    d -= np.diag(d.diagonal()/2)
-    # diag normalisation
-    d *= np.mean(d.diagonal()) / d.diagonal()
-    return d, bin_chr, bin_position
+def normalize_rows(a):
+    """Normalise rows so the sums among rows are identical."""
+    rows, cols = a.shape
+    maxv = a.sum(axis=0).max()
+    for i in xrange(rows):
+        # only if any signal
+        if a[i].max():
+            a[i] *= 1.*maxv/a[i].sum()
+    return a
+            
+def _func_reduce(A, keys, func, allkeys=None):
+    """Reduces along first dimension by aggregating rows with the same keys.
+    new row order will be sorted by keys,  i.e. given by: np.unique(keys)
+    """
+    unique_keys = np.unique(keys)
+    if allkeys == None:
+        allkeys = unique_keys
+    newshape = (len(allkeys), ) + A.shape[1:]
+    newA = np.zeros(newshape, dtype = A.dtype)
+    for i, k in enumerate(allkeys):
+        indices  =  (keys == k)       
+        newA[i] = func(A[indices], axis = 0)
+    return newA
+        
+def _average_reduce(A, keys):
+    return _func_reduce(A, keys, func=np.mean)
+    
+def _average_reduce_2d(A, keys):
+    return _average_reduce(_average_reduce(A, keys).T, keys).T
+        
+def fasta2windows(fasta, windowSize, verbose, skipShorter=1, minSize=2000,
+                  contigs=[], filterwindows=1):
+    """Generate windows over chromosomes"""
+    # init fasta index
+    faidx = FastaIndex(fasta)
+    if verbose:
+        logger("Parsing FastA file...")
+    # filter windows so they are smaller than largest chr and withing reasonalbe range toward genome size
+    if filterwindows:    
+        maxchrlen = max(faidx.id2stats[c][0] for c in faidx)
+        windowSize = filter(lambda x: 1000*x<maxchrlen and 1000*x<0.01*faidx.genomeSize and 1000*x>0.000001*faidx.genomeSize, windowSize)
+        if verbose:
+            logger(" selected %s windows [kb]: %s"%(len(windowSize), str(windowSize)))
+    windowSize = [w*1000 for w in windowSize]
+    # generate windows
+    windows, chr2window = [[] for w in windowSize], [{} for w in windowSize]
+    genomeSize = 0
+    base2chr = {}
+    skipped = []
+    for i, c in enumerate(faidx, 1): 
+        if contigs and c not in contigs:
+            continue
+        if i%1e5 == 1:
+            sys.stderr.write(' %s   \r'%i)
+        # get windows
+        size = faidx.id2stats[c][0]
+        # skip short contigs    
+        if skipShorter and size < min(windowSize) or size<minSize:
+            skipped.append(size)
+            continue
+        for ii in range(len(windowSize)):
+            # skip contig if shorter than given window
+            if skipShorter and size < windowSize[ii]:
+                #print size, "skipped %s"%windowSize[i]
+                continue
+            # get starting window
+            chr2window[ii][c] = len(windows[ii])
+            for start in range(0, size, windowSize[ii]):
+                windows[ii].append((c, start, start+windowSize[ii]))
+            # update last entry end
+            if not skipShorter:
+                windows[ii][-1] = (c, start, size)
+        # get chromosome tick in the middle    
+        base2chr[genomeSize+size/2] = c
+        # update genomeSize
+        genomeSize += size
+    # print [len(w) for w in windows]
+    if verbose:
+        logger(' %s bases in %s contigs divided in %s-%s windows. '%(faidx.genomeSize, len(faidx), len(windows[0]), len(windows[-1])))
+        if skipped:
+            logger('  %s bases in %s contigs skipped.'%(sum(skipped), len(skipped)))
+    return windowSize, windows, chr2window, base2chr, faidx.genomeSize
 
-def _get_samtools_proc(bam, mapq=0, regions=[], skipFlag=3980):
-    """Return samtools subprocess"""
-    # skip second in pair, unmapped, secondary, QC fails and supplementary algs
-    args = map(str, ['samtools', 'view', "-q", mapq, "-F", skipFlag, bam])
-    # add regions
-    if regions:
-        args += regions
-    # start subprocess
-    proc = subprocess.Popen(args, stdout=subprocess.PIPE)
-    return proc
+def get_window(chrom, start, length, windowSize, chr2window):
+    """Return window alignment belongs to. """
+    end = start + length
+    # get middle position
+    pos = int(start+round((end-start)/2))
+    # get window
+    window = pos / windowSize + chr2window[chrom]
+    return window
 
-def bam2array(windows, windowSize, chr2window, bam, mapq, upto=1e7, regions=[], verbose=1, threads=1):
+def bam2array(windows, windowSize, chr2window, bam, mapq, upto=0, regions=[], verbose=1, threads=1):
     """Return contact matrix based on BAM"""
     arrays = [np.zeros((len(w), len(w)), dtype="float32") for w in windows]
     i = 1
@@ -123,233 +168,6 @@ def bam2array(windows, windowSize, chr2window, bam, mapq, upto=1e7, regions=[], 
     proc.terminate()
     return arrays
     
-def _bam2array(args):
-    """Parse pysam alignments and return matching windows"""
-    _bam, regions, mapq, windowSize, chr2window = args 
-    data = [Counter() for ii in range(len(windowSize))]
-    proc = _get_samtools_proc(_bam, mapq, regions)
-    # process reads from given library
-    for line in proc.stdout:
-        # unload data
-        ref1, start1, mapq, cigar, ref2, start2, insertSize, seq = line.split('\t')[2:10]
-        start1, start2, seqlen = int(start1), int(start2), len(seq)
-        # update ref if alignment in the same chrom
-        if ref2 == "=":
-            ref2 = ref1
-        # skip if contig not present in array
-        if ref1 not in chr2window[0] or ref2 not in chr2window[0]:
-            continue
-        # get windows
-        for ii in range(len(windowSize)):
-            w1 = get_window(ref1, start1, seqlen, windowSize[ii], chr2window[ii])
-            w2 = get_window(ref2, start2, seqlen, windowSize[ii], chr2window[ii])
-            # matrix is symmetrix, so make sure to add only to one part
-            if w2 < w1:
-                w1, w2 = w2, w1
-            # update contact array
-            data[ii][(w1, w2)] += 1
-                
-    # stop subprocess
-    proc.terminate()
-    return data
-
-def bam2array_multi(windows, windowSize, chr2window, bam, mapq, upto=1e7, regions=[], verbose=1, threads=1):
-    """Return contact matrix based on BAM"""
-    arrays = [np.zeros((len(w), len(w)), dtype="float32") for w in windows]    
-    i = 1
-    # init empty array
-    for _bam in bam:
-        if verbose:
-            logger(" %s"%_bam)
-        if not regions:
-            regions = chr2window[0].keys()#; print regions[:10]
-        args = [(_bam, [region], mapq, windowSize, chr2window) for region in regions]
-        p = Pool(threads)
-        for wdata in p.imap_unordered(_bam2array, args, chunksize=100):
-            for ii, wdataii in enumerate(wdata):
-                #arrays[ii] += wdataii
-                for (w1, w2), c in wdataii.iteritems():
-                    arrays[ii][w1][w2] += c
-                    if not ii: i += c
-            #i = arrays[0].sum()
-            if upto and i>upto:
-                break
-            sys.stderr.write(" %s \r"%i)
-    if verbose:
-        logger(" %s alignments parsed"%i)
-    return arrays
-
-def load_clusters(fnames, _windowSize=[]):
-    """Load clusters from directory"""
-    clusters, windowSize = [], []
-    for fn in fnames:
-        w = int(os.path.basename(fn).split('k')[0])*1000
-        if _windowSize and w/1000 in _windowSize:
-            clusters.append([l[:-1].split('\t') for l in open(fn)])
-            windowSize.append(w)
-    return clusters, windowSize
-
-def get_longest(t, maxdist=6, k=2.0):
-    """Return node having longest branch
-    THIS CAN BE FASTER DEFINITELY!
-    """
-    #n = sorted(t.traverse(), key=lambda n: 2*n.dist-t.get_distance(n), reverse=1)[0]
-    n = t
-    bestdist = k*n.dist-n.get_distance(t)
-    for _n in t.traverse():
-        if _n.get_distance(t, topology_only=1) > maxdist:
-            break
-        if k*_n.dist-_n.get_distance(t) > bestdist:
-            n = _n
-            bestdist = k*_n.dist-_n.get_distance(t)
-    return n, bestdist
-            
-def get_subtrees(d, bin_chr, bin_position, method="ward", nchrom=1000, distfrac=0.4):
-    """Return contings clustered into scaffolds
-    fastcluster is slightly faster than scipy.cluster.hierarchy and solve the issue: http://stackoverflow.com/a/40738977/632242
-    """
-    maxtdist = 0
-    i = 0
-    subtrees = []
-    names = ["%s %s"%(c, s) for c, (s, e) in zip(bin_chr, bin_position)] #names = get_names(bin_chr, bin_position)
-    Z = fastcluster.linkage(d[np.triu_indices(d.shape[0], 1)], method=method)
-
-    ''' NEE TO BE SOLVED!
-    Z = fastcluster.linkage(d[np.triu_indices(d.shape[0], 1)], method=method) 
-  File "/usr/local/lib/python2.7/dist-packages/fastcluster.py", line 246, in linkage
-    linkage_wrap(N, X, Z, mthidx[method])
-KeyError: 100000
-    '''
-    
-    # t = distance_matrix2tree(Z, names); print len(set(t.get_leaf_names())), len(names)
-    tree = sch.to_tree(Z, False)
-    t = ete3.Tree(getNewick(tree, "", tree.dist, names))
-    for i in range(1, nchrom):
-        tname, tdist = t.get_farthest_leaf()
-        if maxtdist < tdist:
-            maxtdist = tdist
-        # get longest branch
-        n, bestdist = get_longest(t)
-        # break if small subtree
-        if tdist / maxtdist < 1.1 * bestdist / tdist or tdist < maxtdist*distfrac: 
-            break
-        # store cluster
-        subtrees.append(n.get_leaf_names())        
-        # prune tree
-        # removing child is much faster than pruning and faster than recomputing matrix
-        ancestors = n.get_ancestors()
-        p = ancestors[0]
-        p.remove_child(n)
-        n2 = p.get_children()[0]
-        if len(ancestors) < 2: 
-            p.remove_child(n2)
-            t = n2
-            t.dist = 0
-        else:
-            p2 = ancestors[1]
-            p2.remove_child(p)
-            p2.add_child(n2, dist=n2.dist+p.dist)
-    if i:    
-        subtrees.append(t.get_leaf_names())
-    return subtrees
-    
-def get_clusters(outbase, d, contig2size, bin_chr, bin_position, method="ward", nchrom=1000, distfrac=0.75):
-    """Return clusters for given distance matrix"""
-    maxtdist = 0
-    d = transform(d)
-    subtrees = get_subtrees(d, bin_chr, bin_position, method)
-
-    logger(" Assigning contigs to %s clusters..."%len(subtrees))
-    total = correct = 0
-    contig2cluster = {get_name(c): Counter() for c in np.unique(bin_chr)}
-    for i, subtree in enumerate(subtrees, 1):
-        c = Counter(map(get_name, subtree))
-        total += len(subtree)
-        correct += c.most_common(1)[0][1]
-        # poplate contig2cluster
-        for k, v in c.iteritems():
-            if not k: continue
-            contig2cluster[get_name(k)][i] += v
-    logger("  %s / %s [%.2f%s]"%(correct, total, 100.*correct/total, '%'))
-
-    logger(" Weak assignments...")
-    clusters = [[] for i in range(len(subtrees)+1)]
-    withoutCluster, weakCluster = [], []
-    for c, counter in contig2cluster.iteritems():
-        if not counter:
-            withoutCluster.append(c)
-            continue
-        # get major cluster
-        clusteri, count = counter.most_common(1)[0]#; print clusteri, len(clusters), count
-        mfrac = 1. * count / sum(counter.itervalues())
-        clusters[clusteri].append(c)
-        if mfrac < .66:
-            weakCluster.append(c)
-    logger("  %s bp in %s contigs without assignment."%(sum(contig2size[c] for c in withoutCluster), len(withoutCluster)))
-    logger("  %s bp in %s contigs having weak assignment."%(sum(contig2size[c] for c in weakCluster), len(weakCluster)))
-      
-    outfile = outbase+".clusters.tab"
-    clusters = filter(lambda x: x, clusters)
-    totsize = 0
-    logger("Reporting %s clusters to %s ..."%(len(clusters), outfile))
-    with open(outfile, "w") as out:
-        for i, cluster in enumerate(clusters, 1):
-            clSize = sum(contig2size[c] for c in cluster)
-            totsize += clSize
-            out.write("\t".join(cluster)+"\n")
-    logger("  %3s bp in %s clusters generated from %s contigs."%(totsize, len(clusters), len(contig2cluster)))
-    return clusters        
-    
-def bam2clusters(bam, fasta, outdir, windowSize, mapq, threads, dpi, upto, verbose):
-    """Return clusters computed from from windowSizes"""
-    clusters = []
-    # load clusters
-    fnames = glob.glob(os.path.join(outdir, "*k.clusters.tab")) #%",".join(map(str, windowSize))))
-    if fnames:
-        clusters, windowSize = load_clusters(fnames, windowSize)
-        return clusters, windowSize
-    
-    # get windows
-    windowSize, windows, chr2window, base2chr, genomeSize = fasta2windows(fasta, windowSize, verbose, skipShorter=0)
-    
-    # get array from bam
-    logger("Parsing BAM...")
-    arrays = bam2array_multi(windows, windowSize, chr2window, bam,  mapq, upto, threads=threads)
-    
-    faidx = FastaIndex(fasta)
-    contig2size = {c: stats[0] for c, stats in faidx.id2stats.iteritems()}
-    for d, _windowSize, _windows in zip(arrays, windowSize, windows):
-        outfn = outdir + "/%sk"%(_windowSize/1000,)
-        logger("=== %sk windows ==="%(_windowSize/1000,))
-        
-        # save windows, array and plot
-        logger("Saving array...")
-        with gzip.open(outfn+".windows.tab.gz", "w") as out:
-            out.write("\n".join("\t".join(map(str, w)) for w in _windows)+"\n")
-        with open(outfn+".npz", "w") as out:
-            np.savez_compressed(out, d)
-
-        # generate missing handles
-        bin_chr, bin_position = [], []
-        for c, s, e in _windows:
-            bin_chr.append(c)
-            bin_position.append((s, e))
-        bin_chr = np.array(bin_chr)
-        bin_position = np.array(bin_position)
-
-        # make symmetric & normalise
-        logger("Balancing array...")
-        d = normalize(d)
-        #d, bin_chr, bin_position = normalize_diagional(d, bin_chr, bin_position)
-        #d, bin_chr, bin_position = normalize_window_size(d, bin_chr, bin_position, _windowSize)
-        with open(outfn+".balanced.npz", "w") as out:
-            np.savez_compressed(out, d)
-
-        logger("Assigning contigs to clusters/scaffolds...")
-        _clusters = get_clusters(outfn, d, contig2size, bin_chr, bin_position, _windowSize)
-        clusters.append(_clusters)
-    return clusters, windowSize
-
 def get_reversed(scaffold):
     """Return reversed scaffold, updating orientation"""
     return [(name, not orientation) for name, orientation in reversed(scaffold)]
@@ -433,7 +251,7 @@ def contigs2scaffold(args):
     # get windows
     data = fasta2windows(fasta, windowSize, verbose=0, skipShorter=1, contigs=set(contigs), filterwindows=0)
     windowSize, windows, chr2window, base2chr, genomeSize = data
-
+    
     # get array from bam
     arrays = [np.zeros((len(w), len(w)), dtype="float32") for w in windows]
     arrays = bam2array(arrays, windowSize, chr2window, bam,  mapq, regions=contigs, verbose=0)
@@ -459,13 +277,13 @@ def contigs2scaffold(args):
     #d = normalize_rows(d)
 
     # get tree on reduced matrix
-    t = array2tree(transform(_average_reduce_2d(d, bin_chr)), np.unique(bin_chr))
+    t = array2tree(transform(_average_reduce_2d(d, bin_chr)), np.unique(bin_chr))#, "tree_%s"%i)
     
     # get scaffold
     scaffold = tree2scaffold(t, d, bin_chr, bin_position, minWindows)
-
+    
     # estimate & add gaps
-    #scaffold = [(c, o, 1) for c, o in scaffold]; contigbp, gapbp = 1, 0
+    #scaffold = [(c, o, 1) for c, o in scaffold]; return scaffold
     scaffold, contigbp, gapbp = scaffold2gaps(normalize(_average_reduce_2d(d, bin_chr)), np.unique(bin_chr), scaffold, params, fasta)
     
     info = " cluster_%s with %s windows for %s out of %s contigs; %s bp in gaps [%2.2f%s]"
@@ -627,32 +445,19 @@ def report_scaffolds(outbase, scaffolds, faidx, w=60):
     logger(" %s in %s scaffolds reported to %s"%(totsize, len(scaffolds), fastafn))
     return fastafn 
     
-def bam2scaffolds(bam, fasta, outdir, windowSize, windowSize2, mapq, threads, dpi, upto, minWindows, verbose):
+def bam2scaffolds(bam, fasta, outdir, minSize, windowSize2, mapq, threads, dpi, upto, minWindows, verbose):
     """Report scaffolds based on BAM file"""
     faidx = FastaIndex(fasta)
 
     # calculate clusters for various window size
-    logger("=== Clustering ===")
-    clusters, _windowSize = bam2clusters(bam, fasta, outdir, windowSize, mapq, threads, dpi, upto, verbose)
-
-    # use preselected window size
-    if len(windowSize)==1 and windowSize[0]*1000 in _windowSize:
-        selected = _windowSize.index(windowSize[0]*1000)
-    else:
-        selected = np.argmin(map(len, clusters)) # check also number of contigs & cummulative size
-        
-    # choose window with least scaffolds
-    logger("=== Scaffolding ===")
-    _clusters, _windowSize = clusters[selected], _windowSize[selected]
-    logger("Selected %s clusters from window %sk"%(len(_clusters), _windowSize/1000))
-    #return
+    clusters = bam2clusters(bam, fasta, outdir, minSize, mapq, threads, dpi, upto, verbose)
     
     for _windowSize2 in windowSize2:
-        outbase = outdir+"/%sk.%sk"%(_windowSize/1000, _windowSize2)
+        outbase = os.path.join(outdir,"auto.%sk"%_windowSize2)
         
         logger("=== %sk windows ==="%_windowSize2)
         logger("Constructing scaffolds...")
-        scaffolds = get_scaffolds(outbase, bam, fasta.name, _clusters, mapq, minWindows, threads, verbose, _windowSize2)
+        scaffolds = get_scaffolds(outbase, bam, fasta.name, clusters, mapq, minWindows, threads, verbose, _windowSize2)
 
         logger("Reporting %s scaffolds..."%len(scaffolds))
         fastafn = report_scaffolds(outbase, scaffolds, faidx)
@@ -664,17 +469,17 @@ def main():
     usage   = "%(prog)s -v" #usage=usage, 
     parser  = argparse.ArgumentParser(description=desc, epilog=epilog, \
                                       formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('--version', action='version', version='1.01c')   
+    parser.add_argument('--version', action='version', version='1.01d')   
     parser.add_argument("-v", "--verbose", default=False, action="store_true",
                         help="verbose")    
     parser.add_argument("-i", "--bam", nargs="+", help="BAM file(s)")
     parser.add_argument("-f", "--fasta", type=file, help="Genome FastA file")
     parser.add_argument("-o", "--outdir", required=1, help="output name")
-    parser.add_argument("-w", "--windowSize", nargs="+", default=[100, 50, 20, 10], type=int,
-                        help="window size in kb used for karyotyping [%(default)s]")
-    parser.add_argument("-z", "--windowSize2", default=[5, 10, 2], type=int, nargs="+", #50,
+    parser.add_argument("-z", "--windowSize2", default=[5, 10, 2], type=int, nargs="+", 
                         help="window size in kb used for scaffolding [%(default)s]")
-    parser.add_argument("-m", "--mapq", default=10, type=int,
+    parser.add_argument("-m", "--minSize", default=2000, type=int,
+                        help="minimum contig length [%(default)s]")
+    parser.add_argument("-q", "--mapq", default=10, type=int,
                         help="mapping quality [%(default)s]")
     parser.add_argument("-u", "--upto", default=0, type=float,
                         help="process up to this number of reads from each library [all]")
@@ -703,7 +508,8 @@ def main():
         os.makedirs(o.outdir)
         
     # process
-    bam2scaffolds(o.bam, o.fasta, o.outdir, o.windowSize, o.windowSize2, o.mapq, o.threads, o.dpi, o.upto, o.minWindows, o.verbose)
+    bam2scaffolds(o.bam, o.fasta, o.outdir, o.minSize, o.windowSize2, o.mapq, o.threads,
+                  o.dpi, o.upto, o.minWindows, o.verbose)
 
 if __name__=='__main__': 
     t0 = datetime.now()

@@ -8,16 +8,16 @@ import ete3, gzip, os, resource, sys
 from collections import Counter
 from datetime import datetime
 import fastcluster
+from bam2clusters import bam2clusters
+from FastaIndex import FastaIndex
 
 def logger(message, log=sys.stdout):
     """Log messages"""
     memory = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
     log.write("[%s] %s    [memory: %6i Mb]\n"%(datetime.ctime(datetime.now()), message, memory))
 
-transform = lambda x: np.log(np.max(x+1))-np.log(x+1)
-
 # update sys.path & environmental PATH
-root = os.path.dirname(os.path.abspath(sys.argv[0]))
+root = '/home/lpryszcz/src/HiCembler' #os.path.dirname(os.path.abspath(sys.argv[0]))
 src = ["bin", "bin/snap", "bin/sinkhorn_knopp"]
 paths = [os.path.join(root, p) for p in src]
 sys.path = paths + sys.path
@@ -25,34 +25,72 @@ os.environ["PATH"] = "%s:%s"%(':'.join(paths), os.environ["PATH"])
 
 from sinkhorn_knopp import sinkhorn_knopp
 
-def normalize(d, bin_chr, bin_position, max_iter=1000, epsilon=0.00001, windowSize=1000.):
+def normalize(d, bin_chr, bin_position, max_iter=1000, epsilon=0.0001, windowSize=1000.):
+    """Return symmetric and fully balanced matrix using SinkhornKnopp"""
+    print "full sk balancing * dmax"
+    # make symmetric & normalise
+    d += d.T
+    d -= np.diag(d.diagonal()/2)
+    # full balancing
+    sk = sinkhorn_knopp.SinkhornKnopp(max_iter=max_iter, epsilon=epsilon); 
+    d += 1; 
+    d /= d.max(); 
+    d = sk.fit(d) * d.max()#* 100000
+    # 1 round balancing
+    #sk = sinkhorn_knopp.SinkhornKnopp(max_iter=1); d += 1; d /= d.max(); d = sk.fit(d)
+    '''
+    axis = 1; d *= 1. * d.sum(axis=axis).max() / d.sum(axis=axis); print "axis %s norm"%axis #normalize_rows(d)
+    ''' 
+    return d, bin_chr, bin_position
+
+def normalize_diagonal(d, bin_chr, bin_position):
     """Return symmetric and fully balanced matrix using SinkhornKnopp"""
     # make symmetric & normalise
     d += d.T
     d -= np.diag(d.diagonal()/2)
-    #return d, bin_chr, bin_position
-    # normalize by windows size
-    sizes = np.diff(bin_position, axis=1)#[:, 0]
-    #c = Counter(sizes.reshape(len(sizes)))
-    #windowSize, occurencies = c.most_common(1)[0]; print windowSize, occurencies
-    #d *= 1. * windowSize / sizes*sizes.T
-    #d *= (windowSize **2 / (sizes*sizes.T))**0.5; print sizes.shape, sizes.T.shape #reshape(len(sizes),1))
-    # full balancing
-    sk = sinkhorn_knopp.SinkhornKnopp(max_iter=max_iter, epsilon=epsilon); d += 1; d /= d.max(); d = sk.fit(d) * 1000
-    # 1 round balancing
-    #sk = sinkhorn_knopp.SinkhornKnopp(max_iter=1); d += 1; d /= d.max(); d = sk.fit(d) *1000#* windowSize
-    '''
-    axis = 1; d *= 1. * d.sum(axis=axis).max() / d.sum(axis=axis); print "axis %s norm"%axis #normalize_rows(d)
-    ''' # diagonal mean normalisation
-    # normalize_rows(d)
-    '''
-    indices = d.diagonal()!=0; print "diag norm"
+    # diagonal mean normalisation
+    indices = d.diagonal()!=0; print "diag norm 3"
     d = d[indices, :]
     d = d[:, indices]
     bin_chr = bin_chr[indices]
     bin_position = bin_position[indices, :]    
-    d *= np.mean(d.diagonal()) / d.diagonal() #'''
+    n2 = np.mean(d.diagonal()) / d.diagonal()
+    d = (d*n2).T*n2 
     return d, bin_chr, bin_position
+
+def normalize_average(d, bin_chr, bin_position):
+    """Return symmetric and fully balanced matrix using SinkhornKnopp"""
+    # make symmetric & normalise
+    d += d.T
+    d -= np.diag(d.diagonal()/2)
+    # diagonal mean normalisation
+    print "average"
+    n = d.sum(axis=0).max() / d.sum(axis=0)
+    d = (d*n).T*n #/ d.max() *1000
+    return d, bin_chr, bin_position
+
+def normalize_window_size(d, bin_chr, bin_position, windowSize=1e4):
+    """Return symmetric and normalised matrix by window size"""
+    # make symmetric & normalise
+    d += d.T
+    d -= np.diag(d.diagonal()/2)
+    # normalize by windows size
+    sizes = np.diff(bin_position, axis=1)#[:, 0]
+    if not windowSize:
+        c = Counter(sizes.reshape(len(sizes)))
+        windowSize, occurencies = c.most_common(1)[0]; print windowSize, occurencies
+    d = windowSize**2 * (d / sizes ).T / sizes
+    return d, bin_chr, bin_position
+
+def normalize_rows(a):
+    """Normalise rows so the sums among rows are identical."""
+    rows, cols = a.shape
+    maxv = a.sum(axis=0).max()
+    for i in xrange(rows):
+        # only if any signal
+        if a[i].max():
+            a[i] *= 1.*maxv/a[i].sum()
+    return a
 
 def get_contig2size(bin_chr, bin_position):
     """Return contig2size"""
@@ -151,8 +189,11 @@ def load_matrix(fname, chrs=[], remove_shorter=True, scaffolds=[], verbose=0, re
         bin_position = np.array(bin_position)
         contig2size = get_contig2size(bin_chr, bin_position)
     
-    d, bin_chr, bin_position = normalize(d, bin_chr, bin_position)
-            
+    #d, bin_chr, bin_position = normalize(d, bin_chr, bin_position)
+    #d, bin_chr, bin_position = normalize_average(d, bin_chr, bin_position)
+    #d = normalize_rows(d)
+    d, bin_chr, bin_position = normalize_window_size(d, bin_chr, bin_position)#, 2000)
+    
     return d, bin_chr, bin_position, contig2size
 
 def distance_matrix2tree(Z, names):
@@ -314,6 +355,7 @@ def get_subtrees(d, bin_chr, bin_position, method="ward", nchrom=1000, distfrac=
         pruned = t.get_leaf_names()
         c = Counter(get_chr_name(n) for n in pruned)
         print i, len(names), tdist, maxtdist, bestdist, len(pruned), c.most_common(5)
+        t2 = truncate(ete3.Tree(t.write()), maxd=5); t2.render('tree_%s.pdf'%i) 
     return subtrees
     
 def get_subtrees0(d, bin_chr, bin_position, method="ward", nchrom=1000, distfrac=0.4):
@@ -357,9 +399,15 @@ def get_subtrees0(d, bin_chr, bin_position, method="ward", nchrom=1000, distfrac
     return subtrees
 
 
-def main(fn, method="ward"): #
+def main(fn='/home/lpryszcz/cluster/hic/arath/_archives/snap/SRR2626163.100k.npz', method="ward"): #
+    if len(sys.argv)>1:
+        fn = sys.argv[1]
+    if len(sys.argv)>2:
+        method = sys.argv[2]
     d, bin_chr, bin_position, contig2size = load_matrix(fn, remove_shorter=0)
     logger(" Loaded matrix %s..."%(str(d.shape),))
+    
+    transform = lambda x: np.log(np.max(x+1))-np.log(x+1)
     d = transform(d)
     subtrees = get_subtrees(d, bin_chr, bin_position, method)
     
@@ -399,22 +447,58 @@ def main(fn, method="ward"): #
     logger("Reporting %s clusters to %s ..."%(len(clusters), outfile))
     with open(outfile, "w") as out:
         for i, cluster in enumerate(clusters, 1):
-            print " cluster_%s %s windows; %s"%(i, len(cluster), Counter(get_chromosome(cluster)).most_common(3))
             clSize = sum(contig2size[c] for c in cluster)
+            print " cluster_%s %s windows %s bp; %s"%(i, len(cluster), clSize, Counter(get_chromosome(cluster)).most_common(3))         
             totsize += clSize
             totwindows += len(cluster)
             out.write("\t".join(cluster)+"\n")
     logger("  %3s bp in %s clusters generated from %s contigs."%(totsize, len(clusters), totwindows))
+                
+def test(bam=["/mnt/data/lpryszcz/cluster/hic/arath/idba/SRR2626163.contig.fa.bam"], fasta="/mnt/data/lpryszcz/cluster/hic/arath/idba/SRR2626163.contig.fa", outdir="/mnt/data/lpryszcz/cluster/hic/arath/idba/bam2scaffolds.v01d", ref="/mnt/data/lpryszcz/cluster/hic/arath/ref/Ath.fa", minSize=2000):
+    if len(sys.argv)>4:
+        bam, fasta, outdir, ref = sys.argv[1:5]
+        bam = [bam]
+    clusters = bam2clusters(bam, fasta, outdir, minSize=minSize)
+    
+    # generate & load contig2chrom
+    if not os.path.isfile("%s.bed"%fasta):
+        # generate index
+        if not os.path.isfile("%s.suf"%ref):
+            os.system("lastdb %s %s"%(ref, ref))
+        # generate chromosome to tab
+        os.system("lastal -l 100 -C 2 -P 4 %s %s | last-split - | maf-convert tab - | tab2chromosome.py > %s.bed"%(ref, fasta, fasta))
         
+    c2chr = {l.split('\t')[3]: get_name(l.split('\t')[0]) for l in open("%s.bed"%fasta)}
+    
+    # get contig2size
+    faidx = FastaIndex(fasta)
+    contig2size = {c: faidx.id2stats[c][0] for c in faidx}
+    
+    # assign clusters to chr
+    votes = []
+    ncontigs = totsize = totcsize = 0
+    for i, cluster in enumerate(clusters, 1):
+        if not cluster: continue
+        c = Counter(get_name(c2chr[_c]) for _c in cluster if _c in c2chr)
+        if not c: continue
+        chrom = c.most_common(1)[0][0]
+        _votes = [1 if c2chr[_c]==chrom else 0 for _c in cluster if _c in c2chr]
+        csize = sum([contig2size[_c] for _c in cluster if _c in c2chr and c2chr[_c]==chrom])
+        size = sum([contig2size[_c] for _c in cluster if _c in c2chr])
+        if len(cluster)>100:
+            print i, len(cluster), chrom, round(np.mean(_votes),3), csize, round(1.*csize/size,3), c.most_common(3)
+        votes += _votes
+        totcsize += csize
+        totsize += size
+        ncontigs += len(cluster)
+    print "%s bp in %s contigs in %s clusters %.2f%s accuracy; %s bp correct [%.2f%s]"%(totsize, ncontigs, i, 100*np.mean(votes), '%', totcsize, 100.*totcsize/totsize, '%s')
+    
+    return clusters
+            
 if __name__=="__main__":
     t0 = datetime.now()
-    method = "ward"
-    fn = '/home/lpryszcz/cluster/hic/arath/_archives/snap/SRR2626163.100k.npz'
-    if len(sys.argv)>1:
-      fn = sys.argv[1]
-    if len(sys.argv)>2:
-      method = sys.argv[2]
-    main(fn, method)
+    #main()
+    test()
     dt = datetime.now()-t0
     sys.stderr.write("#Time elapsed: %s\n"%dt)
 
