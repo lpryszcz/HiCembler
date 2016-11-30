@@ -9,7 +9,7 @@ epilog="""Author: l.p.pryszcz+git@gmail.com
 Bratislava, 27/10/2016
 """
 
-import ete3, glob, gzip, os, resource, subprocess, sys
+import glob, gzip, os, resource, subprocess, sys
 import scipy.cluster.hierarchy as sch
 import fastcluster
 import numpy as np
@@ -306,6 +306,7 @@ def mylayout(node):
         
 def array2tree(d, names, outbase="", method="ward"):
     """Return tree representation for array"""
+    import ete3
     Z = fastcluster.linkage(d[np.triu_indices(d.shape[0], 1)], method=method)
     tree = sch.to_tree(Z, False)
     t = ete3.Tree(getNewick(tree, "", tree.dist, names))
