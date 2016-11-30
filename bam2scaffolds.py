@@ -19,7 +19,7 @@ from FastaIndex import FastaIndex
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 
-from bam2clusters import logger, normalize, array2tree, bam2clusters, bam2array, _get_samtools_proc, \
+from bam2clusters import logger, normalize, array2tree, bam2clusters, bam2arrays, \
      estimate_distance_parameters, contact_func, distance_func
 
 def normalize_window_size(d, bin_chr, bin_position, windowSize=0):
@@ -238,7 +238,7 @@ def contigs2scaffold(args):
     
     # get array from bam
     arrays = [np.zeros((len(w), len(w)), dtype="float32") for w in windows]
-    arrays = bam2array(arrays, windowSize, chr2window, bam,  mapq, regions=contigs, verbose=0)
+    arrays = bam2arrays(arrays, windowSize, chr2window, bam,  mapq, regions=contigs, verbose=0)
     d = arrays[0]
     
     # generate missing handles

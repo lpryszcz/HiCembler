@@ -103,8 +103,8 @@ def _bam2array(args):
     """Parse pysam alignments and return matching windows"""
     _bam, regions, mapq, windowSize, chr2window, upto = args 
     data = [Counter() for ii in range(len(windowSize))]
-    i = 0
     # process reads from given library
+    i = 0
     proc = _get_samtools_proc(_bam, mapq, regions)
     for i, line in enumerate(proc.stdout, 1):
         if upto and i > upto:
@@ -135,13 +135,14 @@ def _bam2array(args):
 def bam2array_multi(windows, windowSize, chr2window, bam, mapq, upto=0,
                     regions=[], verbose=1, minSize=2000, threads=4):
     """Return contact matrix based on BAM"""
+    # init empty array
     arrays = [np.zeros((len(w), len(w)), dtype="float32") for w in windows]
-    i = 0
     if not regions:
         regions = chr2window[-1].keys()
     if threads > len(regions):
         threads = len(regions)
-    # init empty array
+    # process regions / contigs
+    i = 0
     p = Pool(threads)
     args = [(_bam, regions[ii::threads], mapq, windowSize, chr2window, upto) for _bam in bam for ii in range(threads)]
     for wdata, algs in p.imap_unordered(_bam2array, args):

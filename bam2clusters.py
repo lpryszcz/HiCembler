@@ -35,8 +35,7 @@ def normalize(d, max_iter=1000, epsilon=0.00001):
     """Return fully balanced matrix"""
     sk = sinkhorn_knopp.SinkhornKnopp(max_iter=max_iter, epsilon=epsilon)
     # make symmetric & normalise
-    d += d.T
-    d -= np.diag(d.diagonal()/2)
+    d += d.T - np.diag(d.diagonal())
     d += 1
     vmax = d.max()
     d = sk.fit(d/vmax)
@@ -68,15 +67,20 @@ def logger(message, log=sys.stdout):
 def contigs2windows(fasta, minSize=2000, verbose=0):
     """Return one window per contig, filtering out contigs shorter than minSize"""
     genomeSize = 0
-    windows, skipped, chr2window, contig2size = [], [], {}, {}
+    windows, skipped, chr2window,  = [], [], {}
+    # get N90 & update minSize if smaller
     faidx = FastaIndex(fasta)
+    contig2size = {c: faidx.id2stats[c][0] for c in faidx}
+    n90 = contig2size[faidx.sort(genomeFrac=0.9)[-1]]
+    if n90 > minSize:
+        minSize = n90
+        logger(" updated --minSize to N90: %s"%minSize)
+    # parse fasta & generate windows
     for i, c in enumerate(faidx, 1):
         if i%1e5 == 1:
             sys.stderr.write(' %s   \r'%i)
-        # add contig size
-        size = faidx.id2stats[c][0]
-        contig2size[c] = size
-        # skip short contigs    
+        # skip short contigs   
+        size = contig2size[c]
         if size < minSize:
             skipped.append(size)
             continue
@@ -89,7 +93,7 @@ def contigs2windows(fasta, minSize=2000, verbose=0):
         logger(' %s bases in %s contigs divided in %s windows. '%(faidx.genomeSize, len(faidx), len(windows)))
         if skipped:
             logger('  %s bases in %s contigs skipped.'%(sum(skipped), len(skipped)))
-    return windows, chr2window, contig2size
+    return minSize, windows, chr2window, contig2size
     
 def _get_samtools_proc(bam, mapq=0, regions=[], skipFlag=3980):
     """Return samtools subprocess"""
@@ -111,7 +115,7 @@ def get_window(chrom, start, length, windowSize, chr2window):
     window = pos / windowSize + chr2window[chrom]
     return window
 
-def bam2array(windows, windowSize, chr2window, bam, mapq, upto=0, regions=[], verbose=1, threads=1):
+def bam2arrays(windows, windowSize, chr2window, bam, mapq, upto=0, regions=[], verbose=1, threads=1):
     """Return contact matrix based on BAM"""
     arrays = [np.zeros((len(w), len(w)), dtype="float32") for w in windows]
     i = 1
@@ -154,13 +158,14 @@ def bam2array(windows, windowSize, chr2window, bam, mapq, upto=0, regions=[], ve
 def _bam2array(args):
     """Parse pysam alignments and return matching windows"""
     _bam, contigs, mapq, contig2size, chr2window, minSize = args 
-    data = Counter() #for ii in range(len(windowSize))]
+    data = Counter() 
     regions = []
     for c in contigs: 
         regions += ["%s:%s-%s"%(c, 1, minSize), "%s:%s-%s"%(c, contig2size[c]-minSize, contig2size[c])]
-    proc = _get_samtools_proc(_bam, mapq, regions)
     # process reads from given library
-    for line in proc.stdout:
+    i = 0    
+    proc = _get_samtools_proc(_bam, mapq, regions)
+    for i, line in enumerate(proc.stdout, 1):
         # unload data
         ref1, start1, mapq, cigar, ref2, start2, insertSize, seq = line.split('\t')[2:10]
         start1, start2, seqlen = int(start1), int(start2), len(seq)
@@ -181,29 +186,27 @@ def _bam2array(args):
                 
     # stop subprocess
     proc.terminate()
-    return data
+    return data, i
 
-def bam2array_multi(windows, contig2size, chr2window, bam, mapq, upto=0,
-                    regions=[], verbose=1, minSize=2000, threads=4):
+def bam2array(windows, contig2size, chr2window, bam, mapq=10, upto=0, regions=[], minSize=2000, threads=4, verbose=1):
     """Return contact matrix based on BAM"""
-    arrays = np.zeros((len(windows), len(windows)), dtype="float32")# for w in windows]
-    i = 1
     # init empty array
-    for _bam in bam:
-        if verbose:
-            logger(" %s"%_bam)
-        if not regions:
-            regions = chr2window.keys(); 
-        args = [(_bam, regions[ii::threads], mapq, contig2size, chr2window, minSize) for ii in range(threads)]
-        p = Pool(threads)
-        for wdata in p.imap_unordered(_bam2array, args):#, chunksize=100):
-            for (w1, w2), c in wdata.iteritems():
-                arrays[w1][w2] += c
-                i += c
-            #i = arrays[0].sum()
-            if upto and i>upto:
-                break
-            sys.stderr.write(" %s \r"%i)
+    arrays = np.zeros((len(windows), len(windows)), dtype="float32")
+    if not regions: 
+        regions = chr2window.keys()
+    if threads > len(regions):
+        threads = len(regions)
+    # process regions / contigs
+    i = 0
+    p = Pool(threads)
+    args = [(_bam, regions[ii::threads], mapq, contig2size, chr2window, minSize) for _bam in bam for ii in range(threads)]
+    for wdata, algs in p.imap_unordered(_bam2array, args):
+        i += algs
+        for (w1, w2), c in wdata.iteritems():
+            arrays[w1][w2] += c
+        if upto and i>upto:
+            break
+        sys.stderr.write(" %s \r"%i)
     if verbose:
         logger(" %s alignments parsed"%i)
     return arrays
@@ -235,7 +238,7 @@ def estimate_distance_parameters(out, bam, mapq, contig2size, windowSize=2000, s
         positions = range(windowSize, n*windowSize, windowSize)
         arrays = [np.zeros((n, n), dtype='float32')]
         chr2window = [{c: 0}]
-        arrays = bam2array(arrays, [windowSize], chr2window, bam, mapq, regions=[c], upto=upto, verbose=0)
+        arrays = bam2arrays(arrays, [windowSize], chr2window, bam, mapq, regions=[c], upto=upto, verbose=0)
         d = arrays[0]
         i += d.sum()
         d += d.T - np.diag(d.diagonal())
@@ -318,101 +321,77 @@ def array2tree(d, names, outbase="", method="ward"):
         t.render(pdf, tree_style=ts)
         
     return t
-    
-def get_longest(t, maxdist=5, k=2.0):
-    """Return node having longest branch
-    THIS CAN BE FASTER DEFINITELY!
-    """
-    #n = sorted(t.traverse(), key=lambda n: 2*n.dist-t.get_distance(n), reverse=1)[0]
-    n = t
-    bestdist = k*n.dist-n.get_distance(t)
-    for _n in t.traverse():
-        if _n.get_distance(t, topology_only=1) > maxdist:
-            break
-        if k*_n.dist-_n.get_distance(t) > bestdist:
-            n = _n
-            bestdist = k*_n.dist-_n.get_distance(t)
-    return n, bestdist
 
-def get_name(contig):
-    return contig.split()[0].split('|')[-1].split('.')[0]
-    
-def report_tree(nw, fasta, mind=3, maxd=7):
-    """Save tree pdf"""
-    # load contig2chrom
-    c2chr = {}
-    if os.path.isfile("%s.bed"%fasta):
-        c2chr = {l.split('\t')[3]: get_name(l.split('\t')[0]) for l in open("%s.bed"%fasta)}
-    # load tree
-    t = ete3.Tree(nw)
-    # truncate branches
-    for i, n in enumerate(t.traverse(), 1):
-        dist = t.get_distance(n, topology_only=1)
-        chrs = Counter(c2chr[c] if c in c2chr else c for c in n.get_leaf_names())
-        if dist > mind and len(chrs)==1 or maxd and dist>maxd:
-            n.leaves = n.get_leaf_names()
-            n.chrs = chrs
-            n.name="%s %s chrs %s leaves"%(chrs.most_common(1)[0][0], len(chrs), len(n))
-            for _n in n.get_children():
-                n.remove_child(_n)
+''' 
+def worker(args):
+    d, prng, n, frac = args
+    subset = int(round(n * frac))
+    selection = prng.permutation(n)[:subset]
+    iZ = fastcluster.linkage(d[selection, :][:, selection][np.triu_indices(subset, 1)], method="ward")
+    return np.diff(iZ[:, 2])
+'''
 
-    ts = ete3.TreeStyle()
-    ts.show_leaf_name = False
-    ts.layout_fn = mylayout
-    t.render('truncated.tree.pdf', tree_style=ts)
+def cluster_contigs(outbase, d, bin_chr, bin_position, threads=4, frac=0.8,
+                    iterations=50, maxnumchr=500, seed=0, dpi=100):
+    """Estimate number of chromosomes and assign contigs to chromosomes"""
+    logger(" Estimating number of chromosomes...")
+    prng = np.random#.RandomState()
+    Z = fastcluster.linkage(d[np.triu_indices(d.shape[0], 1)], method="ward")
     
-def get_subtrees(d, bin_chr, bin_position, method="ward", nchrom=1000, distfrac=0.75, fasta=""):
-    """Return contings clustered into scaffolds
-    fastcluster is slightly faster than scipy.cluster.hierarchy and solve the issue: http://stackoverflow.com/a/40738977/632242
-    """
-    subtrees = [] 
-    i = maxtdist = 0
-    t = array2tree(d, bin_chr)#, "clustering.tree")
-    tname, maxtdist = t.get_farthest_leaf()
-    report_tree(t.write(), fasta)
-    for i in range(1, nchrom):
-        tname, tdist = t.get_farthest_leaf()
-        # get longest branch
-        n, bestdist = get_longest(t)
-        # break if small subtree
-        if tdist / maxtdist < 1.1 * bestdist / tdist or tdist < maxtdist*distfrac: 
-            break
-        # store cluster
-        subtrees.append(n.get_leaf_names())
-        print "%s\t%s / %s\t%5.2f %5.2f %5.2f"%(i, len(n), len(t), tdist, maxtdist, bestdist)
-        # prune tree
-        # removing child is much faster than pruning and faster than recomputing matrix
-        ancestors = n.get_ancestors()
-        p = ancestors[0]
-        p.remove_child(n)
-        n2 = p.get_children()[0]
-        if len(ancestors) < 2: 
-            p.remove_child(n2)
-            t = n2
-            t.dist = 0
-        else:
-            p2 = ancestors[1]
-            p2.remove_child(p)
-            p2.add_child(n2, dist=n2.dist+p.dist)
-    if i:    
-        subtrees.append(t.get_leaf_names())
-        print "%s\t%s / %s\t%5.2f %5.2f %5.2f"%(i, len(n), len(t), tdist, maxtdist, bestdist)
-    return subtrees
+    dZ = []
+    n = d.shape[0]
+    ''' 24 vs 31s on 4 cores - it's not worth as need to pickle large matrix and pass it through
+    args = ((d, prng, n, frac) for i in range(iterations))
+    p = Pool(threads)
+    for i, _dZ in enumerate(p.imap_unordered(worker, args), 1):
+        sys.stderr.write(' %s / %s  \r'%(i, iterations))
+        dZ.append(_dZ)
+    '''
+    for i in range(iterations):
+        sys.stderr.write(' %s / %s  \r'%(i+1, iterations))
+        subset = int(round(n * frac))
+        selection = prng.permutation(n)[:subset]
+        iZ = fastcluster.linkage(d[selection, :][:, selection][np.triu_indices(subset, 1)], method="ward")
+        dZ.append(np.diff(iZ[:, 2]))
+    #'''
+    # get number of chromosomes
+    mean_step_len = np.mean(np.array(dZ), 0)
+    nchr = np.argmax(mean_step_len[::-1][:maxnumchr]) + 2
+    logger("  number of chromosomes: %s"%nchr)
+    
+    plt.figure(figsize = (15, 5))
+    plt.plot(np.arange(maxnumchr, 1, -1), mean_step_len[-maxnumchr+1:], 'b')
+    plt.gca().invert_xaxis()
+    plt.xlabel('number of clusters')
+    plt.savefig(outbase+'.avg_step_len.svg', dpi=dpi)
 
+    plt.figure()
+    plt.plot(np.arange(50, 1, -1), mean_step_len[-50+1:], 'b')
+    plt.gca().invert_xaxis()
+    plt.xlabel('number of clusters')
+    plt.savefig(outbase+'.avg_step_len_50.svg', dpi=dpi)
+                          
+    logger(" Assigning contigs to chromosomes...")
+    clusters = [[] for n in range(nchr)]
+    assignments = sch.fcluster(Z, t=nchr, criterion='maxclust')
+    for i, c in zip(assignments-1, bin_chr):
+        clusters[i].append(c)
+    return clusters
+    
 def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, upto=0, verbose=1, method="ward"):
     """Return clusters computed from from windowSizes"""
     logger("=== Clustering ===")
     outbase = os.path.join(outdir, "auto")
     
     # load clusters
-    fname = outbase + ".clusters.tab"
+    fname = outbase + ".clusters.tab_"
     if os.path.isfile(fname):
         clusters = [l[:-1].split('\t') for l in open(fname)]
         logger("  %s clusters loaded."%len(clusters))
         return clusters
 
     # get windows
-    windows, chr2window, contig2size = contigs2windows(fasta, minSize, verbose)
+    minSize, windows, chr2window, contig2size = contigs2windows(fasta, minSize, verbose)
     
     # generate missing handles
     bin_chr, bin_position = [], []
@@ -425,8 +404,7 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
     if not os.path.isfile(outbase+".npz"): #.balanced
         # get array from bam
         logger("Parsing BAM...")
-        d = bam2array_multi(windows, contig2size, chr2window, bam,  mapq, upto, \
-                            threads=threads, minSize=minSize)
+        d = bam2array(windows, contig2size, chr2window, bam,  mapq, upto, threads=threads, minSize=minSize)
 
         # save windows, array and plot
         logger("Saving array...")
@@ -452,7 +430,7 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
     logger("Clustering...")
     params = estimate_distance_parameters(outbase, bam, mapq, contig2size)
     transform = lambda x: distance_func(x+1, *params)
-    clusters = get_subtrees(transform(d), bin_chr, bin_position, method, fasta=fasta)
+    clusters = cluster_contigs(outbase, transform(d), bin_chr, bin_position, dpi=dpi)
     
     # skip empty clusters
     clusters = filter(lambda x: x, clusters)
@@ -481,7 +459,7 @@ def main():
     parser.add_argument("-f", "--fasta", type=file, help="Genome FastA file")
     parser.add_argument("-o", "--outdir", required=1, help="output name")
     parser.add_argument("-m", "--minSize", default=2000, type=int,
-                        help="minimum contig length [%(default)s]")
+                        help="minimum contig length (N90 or larger) [%(default)s]")
     parser.add_argument("-q", "--mapq", default=10, type=int,
                         help="mapping quality [%(default)s]")
     parser.add_argument("-u", "--upto", default=0, type=float,
