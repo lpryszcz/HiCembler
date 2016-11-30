@@ -5,6 +5,9 @@ epilog="""Author: l.p.pryszcz+git@gmail.com
 Bratislava, 19/10/2016
 """
 
+# Force matplotlib to not use any Xwindows backend.
+import matplotlib; matplotlib.use('Agg')
+
 import gzip, os, resource, sys
 import commands, os, subprocess, sys
 from datetime import datetime
