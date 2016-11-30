@@ -190,7 +190,7 @@ def plot(outfn, a, genomeSize, base2chr, _windowSize, dpi=300, ext="svg"):
     # save
     fig.savefig("%s.%s"%(outfn,ext), dpi=dpi, papertype="a4")
 
-def bam2plot(fasta, bam, outbase, windowSize, mapq=10, cores=1,
+def bam2plot(fasta, bam, outbase, windowSize, mapq=10, threads=1,
                 upto=float('inf'), dpi=300, dtype='float32', verbose=1):
     """Convert SAM to SSPACE TAB file."""
     # get windows
