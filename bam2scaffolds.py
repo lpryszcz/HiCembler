@@ -196,7 +196,7 @@ def tree2scaffold(t, d, bin_chr, bin_position, minWindows):
 
     return t.scaffold
         
-def scaffold2gaps(d, bin_chr, scaffold, params, fasta, mingap=100, maxgap=1000000, gapfrac=1.5):
+def scaffold2gaps(d, bin_chr, scaffold, params, fasta, mingap=100, maxgap=1000000, gapfrac=.33):
     """Add gaps to scaffolds
     Here, there may be some smarter way of doing it using ML and all contig contacts at the same time. 
     """
@@ -281,7 +281,7 @@ def get_scaffolds(out, bam, fasta, clusters, mapq, minWindows, threads, verbose,
     contig2size = {c: stats[0] for c, stats in faidx.id2stats.iteritems()}
     
     # estimate distance parameters
-    params = estimate_distance_parameters(out, bam, mapq, contig2size)#, windowSize*1000)
+    params = estimate_distance_parameters(out, bam, mapq, contig2size, windowSize*1000)
     # 
     if threads > 1:
         p = Pool(threads)
@@ -322,19 +322,29 @@ def report_scaffolds(outbase, scaffolds, faidx, w=60):
     logger(" %s in %s scaffolds reported to %s"%(totsize, len(scaffolds), fastafn))
     return fastafn
     
-def bam2scaffolds(bam, fasta, outdir, minSize, windowSize2, mapq, threads, dpi, upto, minWindows, verbose):
+def bam2scaffolds(bam, fasta, outdir, minSize, windowSizes, mapq, threads, dpi, upto, minWindows, verbose):
     """Report scaffolds based on BAM file"""
     faidx = FastaIndex(fasta)
+
+    # check windows size
+    maxwindow = max(stats[0] for stats in faidx.id2stats.itervalues())/ 10e3
+    windowSizes = filter(lambda x: x <= maxwindow, windowSizes)
+    if not windowSizes:
+        info = "Select window sizes (-w) <= %s kb (at least 10x smaller than the longest contig)!\n"
+        sys.stderr.write(info%int(maxwindow))
+        sys.exit(1)
+        
+    logger(" Selected %s window sizes <= %s kb: %s"%(len(windowSizes), int(maxwindow), str(windowSizes)))
 
     # calculate clusters for various window size
     clusters = bam2clusters(bam, fasta, outdir, minSize, mapq, threads, dpi, upto, verbose)
     
-    for _windowSize2 in windowSize2:
-        outbase = os.path.join(outdir,"auto.%sk"%_windowSize2)
+    for windowSize in windowSizes:
+        outbase = os.path.join(outdir,"auto.%sk"%windowSize)
         
-        logger("=== %sk windows ==="%_windowSize2)
+        logger("=== %sk windows ==="%windowSize)
         logger("Constructing scaffolds...")
-        scaffolds = get_scaffolds(outbase, bam, fasta.name, clusters, mapq, minWindows, threads, verbose, _windowSize2)
+        scaffolds = get_scaffolds(outbase, bam, fasta.name, clusters, mapq, minWindows, threads, verbose, windowSize)
 
         logger("Reporting %s scaffolds..."%len(scaffolds))
         fastafn = report_scaffolds(outbase, scaffolds, faidx)
@@ -352,7 +362,7 @@ def main():
     parser.add_argument("-i", "--bam", nargs="+", help="BAM file(s)")
     parser.add_argument("-f", "--fasta", type=file, help="Genome FastA file")
     parser.add_argument("-o", "--outdir", required=1, help="output name")
-    parser.add_argument("-z", "--windowSize2", default=[5, 10, 2], type=int, nargs="+", 
+    parser.add_argument("-w", "--windowSize", default=[5, 10, 2], type=int, nargs="+", 
                         help="window size in kb used for scaffolding [%(default)s]")
     parser.add_argument("-m", "--minSize", default=2000, type=int,
                         help="minimum contig length [%(default)s]")
@@ -385,7 +395,7 @@ def main():
         os.makedirs(o.outdir)
         
     # process
-    bam2scaffolds(o.bam, o.fasta, o.outdir, o.minSize, o.windowSize2, o.mapq, o.threads,
+    bam2scaffolds(o.bam, o.fasta, o.outdir, o.minSize, o.windowSize, o.mapq, o.threads,
                   o.dpi, o.upto, o.minWindows, o.verbose)
 
 if __name__=='__main__': 

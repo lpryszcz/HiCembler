@@ -75,7 +75,7 @@ def contigs2windows(fasta, minSize=2000, verbose=0):
             sys.stderr.write(' %s   \r'%i)
         # add contig size
         size = faidx.id2stats[c][0]
-        contig2size[c] = size    
+        contig2size[c] = size
         # skip short contigs    
         if size < minSize:
             skipped.append(size)
@@ -218,7 +218,11 @@ def contact_func(x, a, b):
     return 1./(a * x ** b)
     
 def estimate_distance_parameters(out, bam, mapq, contig2size, windowSize=2000, skipfirst=5, icontigs=5, upto=1e5):
-    """Return estimated parameters"""
+    """Return estimated parameters.
+    
+    This fails for windowSize larger than longest contig / 10
+    TypeError: Improper input: N=2 must not exceed M=1
+    """
     logger(" Estimating distance parameters...")
     i = 0
     d2c = {0: []}
@@ -234,7 +238,7 @@ def estimate_distance_parameters(out, bam, mapq, contig2size, windowSize=2000, s
         arrays = bam2array(arrays, [windowSize], chr2window, bam, mapq, regions=[c], upto=upto, verbose=0)
         d = arrays[0]
         i += d.sum()
-        d += d.T - np.diag(d.diagonal()/2)
+        d += d.T - np.diag(d.diagonal())
         #d = normalize(d) #normalize_rows(d)
         
         d2c[0] += [d[i][i] for i in range(d.shape[0]-1)]
