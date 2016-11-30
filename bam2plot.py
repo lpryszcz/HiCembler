@@ -35,8 +35,8 @@ def fasta2windows(fasta, windowSize, verbose, skipShorter=1, minSize=2000,
         logger("Parsing FastA file...")
     # filter windows so they are smaller than largest chr and withing reasonalbe range toward genome size
     if filterwindows:    
-        maxchrlen = max(faidx.id2stats[c][0] for c in faidx) # 100-20000 windows
-        windowSize = filter(lambda x: 1000*x<maxchrlen/10 and 1000*x<0.01*faidx.genomeSize and 1000*x>0.00005*faidx.genomeSize, windowSize)
+        maxchrlen = max(faidx.id2stats[c][0] for c in faidx) # 100-50000 windows
+        windowSize = filter(lambda x: 1000*x<maxchrlen/10 and 1000*x<0.01*faidx.genomeSize and 1000*x>0.00002*faidx.genomeSize, windowSize)
         if verbose:
             logger(" selected %s windows [kb]: %s"%(len(windowSize), str(windowSize)))
     windowSize = [w*1000 for w in windowSize]
@@ -217,7 +217,7 @@ def bam2plot(fasta, bam, outbase, windowSize, mapq=10, cores=1,
         # make symmetric
         a += a.T - np.diag(a.diagonal())
             
-        if len(_windows)<2e4:
+        if len(_windows)<5e4:
             plot(_outfn, a, genomeSize, base2chr, _windowSize, dpi)
         elif verbose:
             sys.stderr.write("[WARNING] Very large matrix (%s x %s). Skipped plotting!\n"%(len(_windows), len(_windows)))
