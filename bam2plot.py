@@ -136,24 +136,21 @@ def bam2array_multi(windows, windowSize, chr2window, bam, mapq, upto=0,
     """Return contact matrix based on BAM"""
     arrays = [np.zeros((len(w), len(w)), dtype="float32") for w in windows]
     i = 1
+    if not regions:
+        regions = chr2window[-1].keys()
+    if threads > len(regions):
+        threads = len(regions)
     # init empty array
-    for _bam in bam:
-        if verbose:
-            logger(" %s"%_bam)
-        if not regions:
-            regions = chr2window[-1].keys()
-        if threads > len(regions):
-            threads = len(regions)
-        args = [(_bam, regions[ii::threads], mapq, windowSize, chr2window, upto) for ii in range(threads)]
-        p = Pool(threads)
-        for wdata in p.imap_unordered(_bam2array, args):#, chunksize=100):
-            for ii in range(len(wdata)):
-                for (w1, w2), c in wdata[ii].iteritems():
-                    arrays[ii][w1][w2] += c
-                    i += c
-            if upto and i>upto:
-                break
-            sys.stderr.write(" %s \r"%i)
+    p = Pool(threads)
+    args = [(_bam, regions[ii::threads], mapq, windowSize, chr2window, upto) for ii in range(threads) for _bam in bam]
+    for wdata in p.imap_unordered(_bam2array, args): 
+        for ii in range(len(wdata)):
+            for (w1, w2), c in wdata[ii].iteritems():
+                arrays[ii][w1][w2] += c
+                i += c
+        if upto and i>upto:
+            break
+        sys.stderr.write(" %s \r"%i)
     if verbose:
         logger(" %s alignments parsed"%i)
     return arrays
