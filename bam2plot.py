@@ -198,7 +198,7 @@ def bam2plot(fasta, bam, outbase, windowSize, mapq=10, cores=1,
 
     # get contact matrices
     logger("Parsing alignements...")
-    arrays = bam2array_multi(windows, windowSize, chr2window, bam, mapq, upto=upto)
+    arrays = bam2array_multi(windows, windowSize, chr2window, bam, mapq, upto=upto, threads=threads)
     
     # save
     logger("Saving & plotting...")
