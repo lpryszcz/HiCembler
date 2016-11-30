@@ -9,6 +9,9 @@ epilog="""Author: l.p.pryszcz+git@gmail.com
 Bratislava, 27/10/2016
 """
 
+# Force matplotlib to not use any Xwindows backend.
+import matplotlib; matplotlib.use('Agg')
+
 import glob, gzip, os, resource, subprocess, sys
 import scipy.cluster.hierarchy as sch
 import fastcluster
