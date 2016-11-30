@@ -142,7 +142,7 @@ def bam2array_multi(windows, windowSize, chr2window, bam, mapq, upto=0,
         threads = len(regions)
     # init empty array
     p = Pool(threads)
-    args = [(_bam, regions[ii::threads], mapq, windowSize, chr2window, upto) for ii in range(threads) for _bam in bam]
+    args = [(_bam, regions[ii::threads], mapq, windowSize, chr2window, upto) for _bam in bam for ii in range(threads)]
     for wdata in p.imap_unordered(_bam2array, args): 
         for ii in range(len(wdata)):
             for (w1, w2), c in wdata[ii].iteritems():
