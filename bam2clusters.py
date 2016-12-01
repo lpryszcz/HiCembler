@@ -67,16 +67,16 @@ def logger(message, log=sys.stdout):
     memory = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
     log.write("[%s] %s    [memory: %6i Mb]\n"%(datetime.ctime(datetime.now()), message, memory))
     
-def contigs2windows(fasta, minSize=2000, verbose=0, genomeFrac=0.99):
+def contigs2windows(fasta, minSize=2000, verbose=0, genomeFrac=0.90):
     """Return one window per contig, filtering out contigs shorter than minSize"""
     genomeSize = 0
     windows, skipped, chr2window,  = [], [], {}
     # get N90 & update minSize if smaller
     faidx = FastaIndex(fasta)
     contig2size = {c: faidx.id2stats[c][0] for c in faidx}
-    n99 = contig2size[faidx.sort(genomeFrac=genomeFrac)[-1]]
-    if n99 > minSize:
-        minSize = n99
+    n90 = faidx.get_N_and_L(genomeFrac)
+    if n90 > minSize:
+        minSize = n90
         logger(" updated --minSize to N%s: %s"%(int(100*genomeFrac), minSize))
     # parse fasta & generate windows
     for i, c in enumerate(faidx, 1):
@@ -223,7 +223,7 @@ def contact_func(x, a, b):
     """Function to calculating normalised contact frequency from distance"""
     return 1./(a * x ** b)
     
-def estimate_distance_parameters(out, bam, mapq, contig2size, windowSize=2000, skipfirst=5, icontigs=5, upto=1e6):
+def estimate_distance_parameters(out, bam, mapq, contig2size, windowSize=2000, skipfirst=5, icontigs=5, upto=1e7):
     """Return estimated parameters."""
     logger(" Estimating distance parameters...")
     i = 0
