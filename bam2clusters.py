@@ -388,7 +388,7 @@ def cluster_contigs(outbase, d, bin_chr, bin_position, threads=4, frac=0.8,
     n = d.shape[0]
     subset = int(round(n * frac))
     if subset < maxnumchr:
-        maxnumchr = subset
+        maxnumchr = subset-1
     ''' 24 vs 31s on 4 cores - it's not worth as need to pickle large matrix and pass it through
     args = ((d, prng, n, frac) for i in range(iterations))
     p = Pool(threads)
@@ -406,6 +406,7 @@ def cluster_contigs(outbase, d, bin_chr, bin_position, threads=4, frac=0.8,
     mean_step_len = np.mean(np.array(dZ), 0)
     nchr = np.argmax(mean_step_len[::-1][:maxnumchr]) + 2
     logger("  number of chromosomes: %s"%nchr);
+    print subset, len(mean_step_len), maxnumchr, len(np.arange(maxnumchr, 1, -1)), len(mean_step_len[-maxnumchr+1:])
     
     plt.figure(figsize = (15, 5))
     plt.title("Number of clusters estimation")
