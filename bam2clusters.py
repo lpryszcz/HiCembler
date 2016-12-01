@@ -272,7 +272,7 @@ def get_distances_contacts(bam, mapq, contig2size, windowSize, icontigs=5, upto=
     return dists, contacts
     
 def estimate_distance_parameters(outbase, bam=None, mapq=10, contig2size=None, windowSize=2000, \
-                                 skipfirst=5, icontigs=5, c2dists={}, limit=30, upto=1e7):
+                                 skipfirst=1, icontigs=5, c2dists={}, limit=30, upto=1e7):
     """Return estimated fit parameters.
     bam, contig2size & windowSize or dists & contacts have to be provided.
     """
@@ -285,10 +285,12 @@ def estimate_distance_parameters(outbase, bam=None, mapq=10, contig2size=None, w
         dists = range(-windowSize, (limit+11)*windowSize, windowSize)
         contacts = [[] for i in range(len(dists)+1)]
         longest_contigs = sorted(contig2size, key=lambda x: contig2size[x], reverse=1)[:50]
-        for c in longest_contigs: 
-            for i, nc in  Counter(np.digitize(c2dists[c], dists, right=True)).iteritems():
+        for c in longest_contigs:
+            maxc = max(c2dists[c])
+            if not maxc: continue
+            for i, nc in Counter(np.digitize(c2dists[c], dists, right=True)).iteritems():
                 # normalise contact per 1M
-                #nc = 1e6*nc / sum(c2dists[c])
+                nc = 1.* nc / maxc
                 contacts[i-1].append(nc)
         # remove empty # skip first window (contacts to other chromosomes / contigs)
         _dists, _contacts = dists[1:-1], contacts[1:-1]
@@ -476,7 +478,9 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
     # get clusters on transformed matrix
     #logger("Clustering...")
     #params = estimate_distance_parameters(outbase, bam, mapq, contig2size, minSize)
-    transform = lambda x: distance_func(x+1, *params)
+    normalisation = lambda x: 1.*(x+1)/np.max(x+1)
+    d = normalisation(d)    
+    transform = lambda x: distance_func(x, *params)
     clusters = cluster_contigs(outbase, transform(d), bin_chr, bin_position, dpi=dpi, minchr=minchr)
     
     # skip empty clusters
