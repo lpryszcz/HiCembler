@@ -232,7 +232,7 @@ def estimate_distance_parameters(out, bam, mapq, contig2size, windowSize=2000, s
     maxdist = 0.75 * contig2size[longest_contigs[0]] / 1000.
     for c in longest_contigs[:icontigs]:
         s = contig2size[c]
-        sys.stderr.write(' %s %s bp   \r'%(c, s))
+        sys.stderr.write(' %s %s bp\t%s    \r'%(c, s, i))
         n = s / windowSize + 1 # since windowSize is in kb
         positions = range(windowSize, n*windowSize, windowSize)
         arrays = [np.zeros((n, n), dtype='float32')]
@@ -264,7 +264,7 @@ def estimate_distance_parameters(out, bam, mapq, contig2size, windowSize=2000, s
     plt.ylabel("Normalised contacts")
     plt.xlim(xmin=-dists[1])
     plt.ylim(ymin=0)
-    plt.savefig(out+".png")
+    plt.savefig(out+".distance.png")
     
     x = dists
     yn = np.array([np.median(c) for c in contacts])
