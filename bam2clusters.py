@@ -67,7 +67,7 @@ def logger(message, log=sys.stdout):
     memory = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
     log.write("[%s] %s    [memory: %6i Mb]\n"%(datetime.ctime(datetime.now()), message, memory))
     
-def contigs2windows(fasta, minSize=2000, verbose=0, genomeFrac=0.95):
+def contigs2windows(fasta, minSize=2000, verbose=0, genomeFrac=0.99):
     """Return one window per contig, filtering out contigs shorter than minSize"""
     genomeSize = 0
     windows, skipped, chr2window,  = [], [], {}
@@ -461,15 +461,8 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
         with open(outbase+".npz", "w") as out:
             np.savez_compressed(out, d)
 
+        # estimate parameters
         params = estimate_distance_parameters(outbase, contig2size=contig2size, c2dists=c2dists, windowSize=minSize)
-        '''# make symmetric & normalise
-        logger("Balancing array...")
-        d = normalize(d)
-        #d, bin_chr, bin_position = normalize_diagional(d, bin_chr, bin_position)
-        #d, bin_chr, bin_position = normalize_window_size(d, bin_chr, bin_position, _windowSize)
-        logger(" saving fully balanced array...")
-        with open(outbase+".balanced.npz", "w") as out:
-            np.savez_compressed(out, d)'''
     # load from file
     else:
         npy = np.load(outbase+".npz")
