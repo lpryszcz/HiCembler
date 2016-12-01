@@ -474,7 +474,7 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
     else:
         npy = np.load(outbase+".npz")
         d = npy[npy.files[0]]
-        params = pickle.loads(open(outbase+".distance.params"))
+        params = pickle.load(open(outbase+".distance.params"))
             
     # get clusters on transformed matrix
     #logger("Clustering...")
