@@ -386,6 +386,8 @@ def cluster_contigs(outbase, d, bin_chr, bin_position, threads=4, frac=0.8,
     
     dZ = []
     n = d.shape[0]
+    if n < maxnumchr:
+        maxnumchr = n
     ''' 24 vs 31s on 4 cores - it's not worth as need to pickle large matrix and pass it through
     args = ((d, prng, n, frac) for i in range(iterations))
     p = Pool(threads)
