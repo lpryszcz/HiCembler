@@ -172,11 +172,14 @@ def _bam2array(args):
     for i, line in enumerate(proc.stdout, 1):
         # unload data
         ref1, start1, mapq, cigar, ref2, start2, isize, seq = line.split('\t')[2:10]
-        start1, start2, seqlen = int(start1), int(start2), len(seq)
+        start1, start2, seqlen, isize = int(start1), int(start2), len(seq), abs(int(isize))
         # update ref if alignment in the same chrom
         if ref2 == "=":
-            c2dists[ref1].append(int(isize))
             ref2 = ref1
+        else:
+            isize = -1
+        c2dists[ref1].append(isize)
+        
         # skip if contig not present in array # or not in contig end regions
         if ref1 not in chr2window or ref2 not in chr2window or \
            start2 > minSize and start2 < contig2size[ref2]-minSize-len(seq):
@@ -279,14 +282,16 @@ def estimate_distance_parameters(outbase, bam=None, mapq=10, contig2size=None, w
         dists, contacts = get_distances_contacts(bam, mapq, contig2size, windowSize, icontigs, upto)
     # or use pre-computed insert sizes from longest contigs
     else:
-        dists = range(0, (limit+10)*windowSize, windowSize)
-        contacts = [[] for i in range(len(dists)+10)]
+        dists = range(-windowSize, (limit+11)*windowSize, windowSize)
+        contacts = [[] for i in range(len(dists)+1)]
         longest_contigs = sorted(contig2size, key=lambda x: contig2size[x], reverse=1)[:50]
         for c in longest_contigs: 
-            for i, nc in  Counter(np.digitize(c2dists[c], dists)).iteritems():
+            for i, nc in  Counter(np.digitize(c2dists[c], dists, right=True)).iteritems():
+                # normalise contact per 1M
+                #nc = 1e6*nc / sum(c2dists[c])
                 contacts[i-1].append(nc)
-        # remove empty
-        _dists, _contacts = dists[:-1], contacts[:-1]
+        # remove empty # skip first window (contacts to other chromosomes / contigs)
+        _dists, _contacts = dists[1:-1], contacts[1:-1]
         dists, contacts = [], []
         for d, c in zip(_dists, _contacts):
             if c:
@@ -302,7 +307,7 @@ def estimate_distance_parameters(outbase, bam=None, mapq=10, contig2size=None, w
     plt.xticks(rotation=90)
 
     plt.xlabel("Genomic distance [kb]")
-    plt.ylabel("No. of contacts")
+    plt.ylabel("Contacts")
     plt.xlim(xmin=-dists[1])
     plt.ylim(ymin=0)
     plt.savefig(outbase+".distance.png")
@@ -368,20 +373,16 @@ def array2tree(d, names, outbase="", method="ward"):
         
     return t
 
-''' 
 def worker(args):
-    d, prng, n, frac = args
-    subset = int(round(n * frac))
-    selection = prng.permutation(n)[:subset]
-    iZ = fastcluster.linkage(d[selection, :][:, selection][np.triu_indices(subset, 1)], method="ward")
+    d = args
+    iZ = fastcluster.linkage(d[np.triu_indices(d.shape[0], 1)], method="ward")
     return np.diff(iZ[:, 2])
-'''
 
-def cluster_contigs(outbase, d, bin_chr, bin_position, threads=4, frac=0.8,
-                    iterations=50, maxnumchr=500, seed=0, dpi=100):
+def cluster_contigs(outbase, d, bin_chr, bin_position, threads=4, frac=0.66,
+                    iterations=30, maxnumchr=500, seed=0, dpi=100, minchr=3):
     """Estimate number of chromosomes and assign contigs to chromosomes"""
     logger(" Estimating number of chromosomes...")
-    prng = np.random#.RandomState()
+    prng = np.random#.RandomState(seed)
     Z = fastcluster.linkage(d[np.triu_indices(d.shape[0], 1)], method="ward")
     
     dZ = []
@@ -390,7 +391,7 @@ def cluster_contigs(outbase, d, bin_chr, bin_position, threads=4, frac=0.8,
     if subset < maxnumchr:
         maxnumchr = subset-1
     ''' 24 vs 31s on 4 cores - it's not worth as need to pickle large matrix and pass it through
-    args = ((d, prng, n, frac) for i in range(iterations))
+    args = (d[prng.permutation(n)[:subset], :][:, prng.permutation(n)[:subset]] for i in range(iterations))
     p = Pool(threads)
     for i, _dZ in enumerate(p.imap_unordered(worker, args), 1):
         sys.stderr.write(' %s / %s  \r'%(i, iterations))
@@ -404,13 +405,12 @@ def cluster_contigs(outbase, d, bin_chr, bin_position, threads=4, frac=0.8,
     #'''
     # get number of chromosomes
     mean_step_len = np.mean(np.array(dZ), 0)
-    nchr = np.argmax(mean_step_len[::-1][:maxnumchr]) + 2
-    logger("  number of chromosomes: %s"%nchr);
-    print subset, len(mean_step_len), maxnumchr, len(np.arange(maxnumchr, 1, -1)), len(mean_step_len[-maxnumchr+1:])
+    nchr = np.argmax(mean_step_len[-minchr+1::-1][:maxnumchr]) + minchr
+    logger("  number of chromosomes: %s"%nchr)
     
     plt.figure(figsize = (15, 5))
     plt.title("Number of clusters estimation")
-    plt.plot(np.arange(maxnumchr, 1, -1), mean_step_len[-maxnumchr+1:], 'b')
+    plt.plot(np.arange(maxnumchr, 1, -1), mean_step_len[-maxnumchr+1:], 'b') 
     plt.gca().invert_xaxis()
     plt.xlabel('number of clusters')
     plt.savefig(outbase+'.avg_step_len.svg', dpi=dpi)
@@ -429,7 +429,8 @@ def cluster_contigs(outbase, d, bin_chr, bin_position, threads=4, frac=0.8,
         clusters[i].append(c)
     return clusters
     
-def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, upto=0, verbose=1, method="ward"):
+def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, upto=0, verbose=1,
+                 minchr=3, method="ward"):
     """Return clusters computed from from windowSizes"""
     logger("=== Clustering ===")
     outbase = os.path.join(outdir, "auto")
@@ -476,7 +477,7 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
     #logger("Clustering...")
     #params = estimate_distance_parameters(outbase, bam, mapq, contig2size, minSize)
     transform = lambda x: distance_func(x+1, *params)
-    clusters = cluster_contigs(outbase, transform(d), bin_chr, bin_position, dpi=dpi)
+    clusters = cluster_contigs(outbase, transform(d), bin_chr, bin_position, dpi=dpi, minchr=minchr)
     
     # skip empty clusters
     clusters = filter(lambda x: x, clusters)
@@ -506,6 +507,8 @@ def main():
     parser.add_argument("-o", "--outdir", required=1, help="output name")
     parser.add_argument("-m", "--minSize", default=2000, type=int,
                         help="minimum contig length (N90 or larger) [%(default)s]")
+    parser.add_argument("--minchr", default=3, type=int,
+                        help="minimum no. of chromosomes [%(default)s] has to be >2")
     parser.add_argument("-q", "--mapq", default=10, type=int,
                         help="mapping quality [%(default)s]")
     parser.add_argument("-u", "--upto", default=0, type=float,
@@ -533,7 +536,7 @@ def main():
         os.makedirs(o.outdir)
         
     # process
-    bam2clusters(o.bam, o.fasta, o.outdir, o.minSize, o.mapq, o.threads, o.dpi, o.upto, o.verbose)
+    bam2clusters(o.bam, o.fasta, o.outdir, o.minSize, o.mapq, o.threads, o.dpi, o.upto, o.verbose, o.minchr)
         
 if __name__=='__main__': 
     t0 = datetime.now()
