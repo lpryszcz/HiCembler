@@ -223,7 +223,7 @@ def contact_func(x, a, b):
     """Function to calculating normalised contact frequency from distance"""
     return 1./(a * x ** b)
     
-def estimate_distance_parameters(out, bam, mapq, contig2size, windowSize=2000, skipfirst=5, icontigs=5, upto=1e5):
+def estimate_distance_parameters(out, bam, mapq, contig2size, windowSize=2000, skipfirst=5, icontigs=5, upto=1e7):
     """Return estimated parameters."""
     logger(" Estimating distance parameters...")
     i = 0
