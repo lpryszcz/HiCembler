@@ -264,13 +264,14 @@ def estimate_distance_parameters(out, bam, mapq, contig2size, windowSize=2000, s
     plt.ylabel("Normalised contacts")
     plt.xlim(xmin=-dists[1])
     plt.ylim(ymin=0)
-
+    plt.savefig(out+".png")
+    
     x = dists
     yn = np.array([np.median(c) for c in contacts])
     step = dists[1]/4.
     xs = np.arange(0, max(x)+step, step)
 
-    params, pcov = curve_fit(contact_func, x[skipfirst:], yn[skipfirst:])
+    params, pcov = curve_fit(contact_func, x[skipfirst:], yn[skipfirst:], maxfev=1000)
     plt.plot(xs[1:], contact_func(xs[1:], *params), 'r-', label="Fit\n$ y = 1 / {%0.2f x^ {%0.2f}} $"%tuple(params))
 
     outfn1, outfn2 = out+".distance_fit.png", out+".distance_fit.zoom.png"
