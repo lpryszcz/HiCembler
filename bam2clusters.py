@@ -67,7 +67,7 @@ def logger(message, log=sys.stdout):
     memory = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
     log.write("[%s] %s    [memory: %6i Mb]\n"%(datetime.ctime(datetime.now()), message, memory))
     
-def contigs2windows(fasta, minSize=2000, verbose=0, genomeFrac=0.99):
+def contigs2windows(fasta, minSize=2000, verbose=0, genomeFrac=0.90):
     """Return one window per contig, filtering out contigs shorter than minSize"""
     genomeSize = 0
     windows, skipped, chr2window,  = [], [], {}
