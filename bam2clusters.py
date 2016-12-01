@@ -406,7 +406,7 @@ def cluster_contigs(outbase, d, bin_chr, bin_position, threads=4, frac=0.8,
     mean_step_len = np.mean(np.array(dZ), 0)
     nchr = np.argmax(mean_step_len[::-1][:maxnumchr]) + 2
     logger("  number of chromosomes: %s"%nchr);
-    print len(mean_step_len), maxnumchr, len(np.arange(maxnumchr, 1, -1)), len(mean_step_len[-maxnumchr+1:])
+    print n, len(mean_step_len), maxnumchr, len(np.arange(maxnumchr, 1, -1)), len(mean_step_len[-maxnumchr+1:])
     
     plt.figure(figsize = (15, 5))
     plt.title("Number of clusters estimation")
