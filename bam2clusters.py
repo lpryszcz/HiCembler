@@ -27,15 +27,15 @@ from scipy.optimize import curve_fit
 
 # update sys.path & environmental PATH
 root = os.path.dirname(os.path.abspath(sys.argv[0]))
-src = ["bin", "bin/snap", "bin/sinkhorn_knopp"]
+src = ["bin", "bin/FastaIndex", "bin/idba/bin", "bin/snap", "bin/sinkhorn_knopp"]
 paths = [os.path.join(root, p) for p in src]
 sys.path = paths + sys.path
 os.environ["PATH"] = "%s:%s"%(':'.join(paths), os.environ["PATH"])
 
-from sinkhorn_knopp import sinkhorn_knopp
 
 def normalize(d, max_iter=1000, epsilon=0.00001):
     """Return fully balanced matrix"""
+    from sinkhorn_knopp import sinkhorn_knopp
     sk = sinkhorn_knopp.SinkhornKnopp(max_iter=max_iter, epsilon=epsilon)
     # make symmetric & normalise
     d += d.T - np.diag(d.diagonal())
@@ -67,17 +67,17 @@ def logger(message, log=sys.stdout):
     memory = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
     log.write("[%s] %s    [memory: %6i Mb]\n"%(datetime.ctime(datetime.now()), message, memory))
     
-def contigs2windows(fasta, minSize=2000, verbose=0):
+def contigs2windows(fasta, minSize=2000, verbose=0, genomeFrac=0.99):
     """Return one window per contig, filtering out contigs shorter than minSize"""
     genomeSize = 0
     windows, skipped, chr2window,  = [], [], {}
     # get N90 & update minSize if smaller
     faidx = FastaIndex(fasta)
     contig2size = {c: faidx.id2stats[c][0] for c in faidx}
-    n90 = contig2size[faidx.sort(genomeFrac=0.9)[-1]]
-    if n90 > minSize:
-        minSize = n90
-        logger(" updated --minSize to N90: %s"%minSize)
+    n99 = contig2size[faidx.sort(genomeFrac=genomeFrac)[-1]]
+    if n99 > minSize:
+        minSize = n99
+        logger(" updated --minSize to N%s: %s"%(int(100*genomeFrac), minSize))
     # parse fasta & generate windows
     for i, c in enumerate(faidx, 1):
         if i%1e5 == 1:
@@ -224,11 +224,7 @@ def contact_func(x, a, b):
     return 1./(a * x ** b)
     
 def estimate_distance_parameters(out, bam, mapq, contig2size, windowSize=2000, skipfirst=5, icontigs=5, upto=1e5):
-    """Return estimated parameters.
-    
-    This fails for windowSize larger than longest contig / 10
-    TypeError: Improper input: N=2 must not exceed M=1
-    """
+    """Return estimated parameters."""
     logger(" Estimating distance parameters...")
     i = 0
     d2c = {0: []}
@@ -431,8 +427,8 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
         d = npy[npy.files[0]]
             
     # get clusters on transformed matrix
-    logger("Clustering...")
-    params = estimate_distance_parameters(outbase, bam, mapq, contig2size)
+    #logger("Clustering...")
+    params = estimate_distance_parameters(outbase, bam, mapq, contig2size, minSize)
     transform = lambda x: distance_func(x+1, *params)
     clusters = cluster_contigs(outbase, transform(d), bin_chr, bin_position, dpi=dpi)
     

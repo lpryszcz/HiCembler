@@ -5,4 +5,12 @@
 [submodule "bin/sinkhorn_knopp"]
     path = bin/sinkhorn_knopp
     url = https://github.com/btaba/sinkhorn_knopp
-    
+
+[submodule "bin/idba"]
+    path = bin/idba
+    url = https://github.com/loneknightpy/idba.git
+
+[submodule "bin/FastaIndex"]
+    path = bin/FastaIndex
+    url = https://github.com/lpryszcz/FastaIndex.git
+
