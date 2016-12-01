@@ -12,7 +12,7 @@ Bratislava, 27/10/2016
 # Force matplotlib to not use any Xwindows backend.
 import matplotlib; matplotlib.use('Agg')
 
-import glob, gzip, os, resource, subprocess, sys
+import glob, gzip, os, pickle, resource, subprocess, sys
 import scipy.cluster.hierarchy as sch
 import fastcluster
 import numpy as np
@@ -166,14 +166,16 @@ def _bam2array(args):
     for c in contigs: 
         regions += ["%s:%s-%s"%(c, 1, minSize), "%s:%s-%s"%(c, contig2size[c]-minSize, contig2size[c])]
     # process reads from given library
+    c2dists = {c: [] for c in contigs}
     i = 0    
     proc = _get_samtools_proc(_bam, mapq, regions)
     for i, line in enumerate(proc.stdout, 1):
         # unload data
-        ref1, start1, mapq, cigar, ref2, start2, insertSize, seq = line.split('\t')[2:10]
+        ref1, start1, mapq, cigar, ref2, start2, isize, seq = line.split('\t')[2:10]
         start1, start2, seqlen = int(start1), int(start2), len(seq)
         # update ref if alignment in the same chrom
         if ref2 == "=":
+            c2dists[ref1].append(int(isize))
             ref2 = ref1
         # skip if contig not present in array # or not in contig end regions
         if ref1 not in chr2window or ref2 not in chr2window or \
@@ -189,30 +191,40 @@ def _bam2array(args):
                 
     # stop subprocess
     proc.terminate()
-    return data, i
+    return data, i, c2dists
 
-def bam2array(windows, contig2size, chr2window, bam, mapq=10, upto=0, regions=[], minSize=2000, threads=4, verbose=1):
-    """Return contact matrix based on BAM"""
+def bam2array(windows, contig2size, chr2window, bam, mapq=10, upto=0, \
+              regions=[], minSize=2000, threads=4, verbose=1):
+    """Return contact matrix and insert sizes from BAM
+    Process only ends of contigs.
+    """
     # init empty array
-    arrays = np.zeros((len(windows), len(windows)), dtype="float32")
+    array = np.zeros((len(windows), len(windows)), dtype="float32")
     if not regions: 
         regions = chr2window.keys()
     if threads > len(regions):
         threads = len(regions)
     # process regions / contigs
     i = 0
+    c2dists = {}    
     p = Pool(threads)
-    args = [(_bam, regions[ii::threads], mapq, contig2size, chr2window, minSize) for _bam in bam for ii in range(threads)]
-    for wdata, algs in p.imap_unordered(_bam2array, args):
+    args = [(_bam, regions[ii::threads], mapq, contig2size, chr2window, minSize)
+            for _bam in bam for ii in range(threads)]
+    for wdata, algs, _c2dists in p.imap_unordered(_bam2array, args):
         i += algs
         for (w1, w2), c in wdata.iteritems():
-            arrays[w1][w2] += c
+            array[w1][w2] += c
+        # this may be risky for very fragmented assemblies
+        for c in _c2dists:
+            if c not in c2dists:
+                c2dists[c] = []
+            c2dists[c] += _c2dists[c]
         if upto and i>upto:
             break
         sys.stderr.write(" %s \r"%i)
     if verbose:
         logger(" %s alignments parsed"%i)
-    return arrays
+    return array, c2dists
 
 def distance_func(x, a, b, maxv=float('inf')):
     """Function to calculating distance from normalised contact frequency"""
@@ -223,7 +235,7 @@ def contact_func(x, a, b):
     """Function to calculating normalised contact frequency from distance"""
     return 1./(a * x ** b)
     
-def estimate_distance_parameters(out, bam, mapq, contig2size, windowSize=2000, skipfirst=5, icontigs=5, upto=1e7):
+def get_distances_contacts(bam, mapq, contig2size, windowSize, icontigs=5, upto=1e7):
     """Return estimated parameters."""
     logger(" Estimating distance parameters...")
     i = 0
@@ -252,29 +264,62 @@ def estimate_distance_parameters(out, bam, mapq, contig2size, windowSize=2000, s
                 d2c[dist].append(d[i][j])
 
     # plot up to 0.75x max dist
-    dists = np.array([d for d in sorted(d2c)[:30] if d<maxdist])
+    dists = np.array([d for d in sorted(d2c) if d<maxdist]) #[:30]
     contacts = [d2c[d] for d in dists]
+    return dists, contacts
+    
+def estimate_distance_parameters(outbase, bam=None, mapq=10, contig2size=None, windowSize=2000, \
+                                 skipfirst=5, icontigs=5, c2dists={}, limit=30, upto=1e7):
+    """Return estimated fit parameters.
+    bam, contig2size & windowSize or dists & contacts have to be provided.
+    """
+    logger(" Estimating distance parameters...")
+    # process bam
+    if bam and not iSizes:
+        dists, contacts = get_distances_contacts(bam, mapq, contig2size, windowSize, icontigs, upto)
+    # or use pre-computed insert sizes from longest contigs
+    else:
+        dists = range(0, (limit+10)*windowSize, windowSize)
+        contacts = [[] for i in range(len(dists)+10)]
+        longest_contigs = sorted(contig2size, key=lambda x: contig2size[x], reverse=1)[:50]
+        for c in longest_contigs: 
+            for i, nc in  Counter(np.digitize(c2dists[c], dists)).iteritems():
+                contacts[i-1].append(nc)
+        # remove empty
+        _dists, _contacts = dists[:-1], contacts[:-1]
+        dists, contacts = [], []
+        for d, c in zip(_dists, _contacts):
+            if c:
+                dists.append(d/1000.)
+                contacts.append(c)
+        
+    # keep only smallest dists for estimation & plotting
+    dists, contacts = dists[:limit], contacts[:limit]
     
     plt.figure()
-    plt.title("Normalised HiC contacts vs distance")
+    plt.title("HiC contacts vs distance")
     plt.boxplot(contacts, 1, '', positions=dists, widths=.75*dists[1])
     plt.xticks(rotation=90)
 
     plt.xlabel("Genomic distance [kb]")
-    plt.ylabel("Normalised contacts")
+    plt.ylabel("No. of contacts")
     plt.xlim(xmin=-dists[1])
     plt.ylim(ymin=0)
-    plt.savefig(out+".distance.png")
+    plt.savefig(outbase+".distance.png")
     
     x = dists
     yn = np.array([np.median(c) for c in contacts])
     step = dists[1]/4.
     xs = np.arange(0, max(x)+step, step)
 
-    params, pcov = curve_fit(contact_func, x[skipfirst:], yn[skipfirst:], maxfev=1000)
-    plt.plot(xs[1:], contact_func(xs[1:], *params), 'r-', label="Fit\n$ y = 1 / {%0.2f x^ {%0.2f}} $"%tuple(params))
-
-    outfn1, outfn2 = out+".distance_fit.png", out+".distance_fit.zoom.png"
+    params, pcov = curve_fit(contact_func, x[skipfirst:], yn[skipfirst:])#, maxfev=1000)
+    outfn = outbase+".distance.params"
+    with open(outfn, "w") as out:
+        pickle.dump(params, out)
+    # plot fit
+    plt.plot(xs[1:], contact_func(xs[1:], *params), 'r-', label="Fit\n$ y = 1 / {%0.3f x^ {%0.3f}} $"%tuple(params))
+    
+    outfn1, outfn2 = outbase+".distance_fit.png", outbase+".distance_fit.zoom.png"
     plt.legend(fancybox=True, shadow=True)
     plt.savefig(outfn1)
     plt.ylim(ymin=0, ymax=yn[0]/30.)
@@ -361,12 +406,14 @@ def cluster_contigs(outbase, d, bin_chr, bin_position, threads=4, frac=0.8,
     logger("  number of chromosomes: %s"%nchr)
     
     plt.figure(figsize = (15, 5))
+    plt.title("Number of clusters estimation")
     plt.plot(np.arange(maxnumchr, 1, -1), mean_step_len[-maxnumchr+1:], 'b')
     plt.gca().invert_xaxis()
     plt.xlabel('number of clusters')
     plt.savefig(outbase+'.avg_step_len.svg', dpi=dpi)
 
     plt.figure()
+    plt.title("Number of clusters estimation")
     plt.plot(np.arange(50, 1, -1), mean_step_len[-50+1:], 'b')
     plt.gca().invert_xaxis()
     plt.xlabel('number of clusters')
@@ -405,7 +452,7 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
     if not os.path.isfile(outbase+".npz"): #.balanced
         # get array from bam
         logger("Parsing BAM...")
-        d = bam2array(windows, contig2size, chr2window, bam,  mapq, upto, threads=threads, minSize=minSize)
+        d, c2dists = bam2array(windows, contig2size, chr2window, bam,  mapq, upto, threads=threads, minSize=minSize)
 
         # save windows, array and plot
         logger("Saving array...")
@@ -414,6 +461,7 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
         with open(outbase+".npz", "w") as out:
             np.savez_compressed(out, d)
 
+        params = estimate_distance_parameters(outbase, contig2size=contig2size, c2dists=c2dists, windowSize=minSize)
         '''# make symmetric & normalise
         logger("Balancing array...")
         d = normalize(d)
@@ -426,10 +474,11 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
     else:
         npy = np.load(outbase+".npz")
         d = npy[npy.files[0]]
+        params = pickle.loads(open(outbase+".distance.params"))
             
     # get clusters on transformed matrix
     #logger("Clustering...")
-    params = estimate_distance_parameters(outbase, bam, mapq, contig2size, minSize)
+    #params = estimate_distance_parameters(outbase, bam, mapq, contig2size, minSize)
     transform = lambda x: distance_func(x+1, *params)
     clusters = cluster_contigs(outbase, transform(d), bin_chr, bin_position, dpi=dpi)
     

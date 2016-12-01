@@ -456,12 +456,13 @@ def main(fn='/home/lpryszcz/cluster/hic/arath/_archives/snap/SRR2626163.100k.npz
                 
 def test(bam=["/mnt/data/lpryszcz/cluster/hic/arath/idba/SRR2626163.contig.fa.bam"], fasta="/mnt/data/lpryszcz/cluster/hic/arath/idba/SRR2626163.contig.fa", outdir="/mnt/data/lpryszcz/cluster/hic/arath/idba/bam2scaffolds.v01d", ref="/mnt/data/lpryszcz/cluster/hic/arath/ref/Ath.fa", minSize=2000):
 
-    if not os.path.isdir(outdir):
-        os.makedirs(outdir)
-    
     if len(sys.argv)>4:
         bam, fasta, outdir, ref = sys.argv[1:5]
         bam = [bam]
+        
+    if not os.path.isdir(outdir):
+        os.makedirs(outdir)
+    
     clusters = bam2clusters(bam, fasta, outdir, minSize=minSize)
     
     
