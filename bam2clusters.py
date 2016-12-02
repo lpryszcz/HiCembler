@@ -286,7 +286,7 @@ def estimate_distance_parameters(outbase, bam=None, mapq=10, contig2size=None, w
     """
     logger(" Estimating distance parameters...")
     # process bam
-    if bam and not iSizes:
+    if bam and not c2dists:
         dists, contacts = get_distances_contacts(bam, mapq, contig2size, windowSize, icontigs, upto)
     # or use pre-computed insert sizes from longest contigs
     else:
@@ -447,7 +447,7 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
     outbase = os.path.join(outdir, "auto")
     
     # load clusters
-    fname = outbase + ".clusters.tab_"
+    fname = outbase + ".clusters.tab"
     if os.path.isfile(fname):
         clusters = [l[:-1].split('\t') for l in open(fname)]
         logger("  %s clusters loaded."%len(clusters))
@@ -489,7 +489,7 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
             
     # get clusters on transformed matrix
     transform = lambda x: distance_func(x+1, *params); print "dist"
-    transform = lambda x: np.sum(x+1.) / (1e6*(x+1)); print "sum / xM"
+    #transform = lambda x: np.sum(x+1.) / (1e6*(x+1)); print "sum / xM"
     #transform = lambda x: np.max(x+1., axis=0) / (x+1) - 1; print "max0/x - 1"
     #transform = lambda x: np.max(x+1.) / (x+1) - 1; print "max/x - 1"
     #transform = lambda x: np.log(np.max(x+1))-np.log(x+1); print "log max x - log x"
