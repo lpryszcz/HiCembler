@@ -198,7 +198,7 @@ def _bam2array(args):
     return data, i, c2dists
 
 def bam2array(windows, contig2size, chr2window, bam, mapq=10, upto=0, \
-              regions=[], minSize=2000, threads=4, verbose=1):
+              regions=[], minSize=2000, threads=4, verbose=1, nth=5):
     """Return contact matrix and insert sizes from BAM
     Process only ends of contigs.
     """
@@ -211,7 +211,7 @@ def bam2array(windows, contig2size, chr2window, bam, mapq=10, upto=0, \
     # process regions / contigs
     i = 0
     c2dists = {}
-    c2regions = {c: np.array([(s+1, s+minSize) for s in range(0, contig2size[c]+1-minSize, 10*minSize)]) for c in chr2window}
+    c2regions = {c: np.array([(s+1, s+minSize) for s in range(0, contig2size[c]+1-minSize, nth*minSize)]) for c in chr2window}
     sizes = [len(c2regions[c]) for c, s, e in windows]
     p = Pool(threads)
     args = [(_bam, regions[ii::threads], mapq, contig2size, chr2window, c2regions) # minSize
