@@ -447,7 +447,7 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
     outbase = os.path.join(outdir, "auto")
     
     # load clusters
-    fname = outbase + ".clusters.tab"
+    fname = outbase + ".clusters.tab_"
     if os.path.isfile(fname):
         clusters = [l[:-1].split('\t') for l in open(fname)]
         logger("  %s clusters loaded."%len(clusters))
