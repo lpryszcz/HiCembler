@@ -32,7 +32,6 @@ paths = [os.path.join(root, p) for p in src]
 sys.path = paths + sys.path
 os.environ["PATH"] = "%s:%s"%(':'.join(paths), os.environ["PATH"])
 
-
 def normalize(d, max_iter=1000, epsilon=0.00001):
     """Return fully balanced matrix"""
     from sinkhorn_knopp import sinkhorn_knopp
@@ -479,8 +478,10 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
     #logger("Clustering...")
     #params = estimate_distance_parameters(outbase, bam, mapq, contig2size, minSize)
     normalisation = lambda x: 1.*(x+1)/np.max(x+1)
-    d = normalisation(d)    
+    d = normalisation(d) 
     transform = lambda x: distance_func(x, *params)
+    #transform = lambda x: np.log(np.max(x+1., axis=0) / (x+1))
+    #transform = lambda x: 1 - (x+1) / np.max(x+1) 
     clusters = cluster_contigs(outbase, transform(d), bin_chr, bin_position, dpi=dpi, minchr=minchr)
     
     # skip empty clusters
