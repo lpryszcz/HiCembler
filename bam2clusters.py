@@ -66,7 +66,7 @@ def logger(message, log=sys.stdout):
     memory = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
     log.write("[%s] %s    [memory: %6i Mb]\n"%(datetime.ctime(datetime.now()), message, memory))
     
-def contigs2windows(fasta, minSize=2000, verbose=0, genomeFrac=0.90):
+def contigs2windows(fasta, minSize=2000, verbose=0, genomeFrac=0.95):
     """Return one window per contig, filtering out contigs shorter than minSize"""
     genomeSize = 0
     windows, skipped, chr2window,  = [], [], {}
@@ -280,7 +280,7 @@ def get_distances_contacts(bam, mapq, contig2size, windowSize, icontigs=5, upto=
     return dists, contacts
     
 def estimate_distance_parameters(outbase, bam=None, mapq=10, contig2size=None, windowSize=2000, \
-                                 skipfirst=1, icontigs=5, c2dists={}, limit=30, upto=1e7):
+                                 skipfirst=5, icontigs=5, c2dists={}, limit=30, upto=1e7):
     """Return estimated fit parameters.
     bam, contig2size & windowSize or dists & contacts have to be provided.
     """
