@@ -491,8 +491,9 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
     transform = lambda x: distance_func(x+1, *params); print "dist"
     #transform = lambda x: np.sum(x+1.) / (1e6*(x+1)); print "sum / xM"
     #transform = lambda x: np.max(x+1., axis=0) / (x+1) - 1; print "max0/x - 1"
-    transform = lambda x: np.max(x+1.) / (x+1) - 1; print "max/x - 1"
+    #transform = lambda x: np.max(x+1.) / (x+1) - 1; print "max/x - 1"
     #transform = lambda x: np.log(np.max(x+1))-np.log(x+1); print "log max x - log x"
+    #transform = lambda x: np.log(np.max(x+1, axis=0))-np.log(x+1); print "log max x0 - log x"
     clusters = cluster_contigs(outbase, transform(d), bin_chr, bin_position, dpi=dpi, minchr=minchr)
     
     # skip empty clusters
