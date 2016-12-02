@@ -159,11 +159,12 @@ def bam2arrays(windows, windowSize, chr2window, bam, mapq, upto=0, regions=[], v
     
 def _bam2array(args):
     """Parse pysam alignments and return matching windows"""
-    _bam, contigs, mapq, contig2size, chr2window, minSize = args 
+    _bam, contigs, mapq, contig2size, chr2window, c2regions = args 
     data = Counter() 
     regions = []
     for c in contigs: 
-        regions += ["%s:%s-%s"%(c, 1, minSize), "%s:%s-%s"%(c, contig2size[c]-minSize, contig2size[c])]
+        #regions += ["%s:%s-%s"%(c, 1, minSize), "%s:%s-%s"%(c, contig2size[c]-minSize, contig2size[c])]
+        regions += ["%s:%s-%s"%(c, s, e) for s, e in c2regions[c]]
     # process reads from given library
     c2dists = {c: [] for c in contigs}
     i = 0    
@@ -178,18 +179,19 @@ def _bam2array(args):
         else:
             isize = -1
         c2dists[ref1].append(isize)
-        
+            
         # skip if contig not present in array # or not in contig end regions
-        if ref1 not in chr2window or ref2 not in chr2window or \
-           start2 > minSize and start2 < contig2size[ref2]-minSize-len(seq):
-            continue
-        # get windows
-        w1, w2 = chr2window[ref1], chr2window[ref2]
-        # matrix is symmetrix, so make sure to add only to one part
-        if w2 < w1:
-            w1, w2 = w2, w1
-        # update contact array
-        data[(w1, w2)] += 1
+        start2 += seqlen/2
+        # here not sure in any or in the same window; for now checking if in any
+        #start2 < minSize or start2 > contig2size[ref2]-minSize-len(seq):
+        if ref2 in chr2window and np.any([c2regions[ref2][:,0] <= start2, c2regions[ref2][:,1] >= start2]): 
+            # get windows
+            w1, w2 = chr2window[ref1], chr2window[ref2]
+            # matrix is symmetrix, so make sure to add only to one part
+            if w2 < w1:
+                w1, w2 = w2, w1
+            # update contact array
+            data[(w1, w2)] += 1
                 
     # stop subprocess
     proc.terminate()
@@ -208,9 +210,11 @@ def bam2array(windows, contig2size, chr2window, bam, mapq=10, upto=0, \
         threads = len(regions)
     # process regions / contigs
     i = 0
-    c2dists = {}    
+    c2dists = {}
+    c2regions = {c: np.array([(s+1, s+minSize) for s in range(0, contig2size[c]+1-minSize, 10*minSize)]) for c in chr2window}
+    sizes = [len(c2regions[c]) for c, s, e in windows]
     p = Pool(threads)
-    args = [(_bam, regions[ii::threads], mapq, contig2size, chr2window, minSize)
+    args = [(_bam, regions[ii::threads], mapq, contig2size, chr2window, c2regions) # minSize
             for _bam in bam for ii in range(threads)]
     for wdata, algs, _c2dists in p.imap_unordered(_bam2array, args):
         i += algs
@@ -226,6 +230,11 @@ def bam2array(windows, contig2size, chr2window, bam, mapq=10, upto=0, \
         sys.stderr.write(" %s \r"%i)
     if verbose:
         logger(" %s alignments parsed"%i)
+
+    # norm by size
+    print array.sum(), array.mean(), array.max()  
+    array = (array / sizes).T / sizes
+    print array.sum(), array.mean(), array.max()
     return array, c2dists
 
 def distance_func(x, a, b, maxv=float('inf')):
@@ -459,7 +468,7 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
         # get array from bam
         logger("Parsing BAM...")
         d, c2dists = bam2array(windows, contig2size, chr2window, bam,  mapq, upto, threads=threads, minSize=minSize)
-
+        
         # save windows, array and plot
         logger("Saving array...")
         with gzip.open(outbase + ".windows.tab.gz", "w") as out:
@@ -475,9 +484,15 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
         d = npy[npy.files[0]]
         params = pickle.load(open(outbase+".distance.params"))
             
+    # make symmetric
+    d += d.T - np.diag(d.diagonal())
+            
     # get clusters on transformed matrix
-    #transform = lambda x: distance_func(x+1, *params)
-    transform = lambda x: np.sum(x+1.) / (1e6*(x+1))
+    transform = lambda x: distance_func(x+1, *params); print "dist"
+    #transform = lambda x: np.sum(x+1.) / (1e6*(x+1)); print "sum / xM"
+    #transform = lambda x: np.max(x+1., axis=0) / (x+1) - 1; print "max0/x - 1"
+    transform = lambda x: np.max(x+1.) / (x+1) - 1; print "max/x - 1"
+    #transform = lambda x: np.log(np.max(x+1))-np.log(x+1); print "log max x - log x"
     clusters = cluster_contigs(outbase, transform(d), bin_chr, bin_position, dpi=dpi, minchr=minchr)
     
     # skip empty clusters
