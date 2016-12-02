@@ -455,15 +455,18 @@ def main(fn='/home/lpryszcz/cluster/hic/arath/_archives/snap/SRR2626163.100k.npz
     logger("  %3s bp in %s clusters generated from %s contigs."%(totsize, len(clusters), totwindows))
                 
 def test(bam=["/mnt/data/lpryszcz/cluster/hic/arath/idba/SRR2626163.contig.fa.bam"], fasta="/mnt/data/lpryszcz/cluster/hic/arath/idba/SRR2626163.contig.fa", outdir="/mnt/data/lpryszcz/cluster/hic/arath/idba/bam2scaffolds.v01d", ref="/mnt/data/lpryszcz/cluster/hic/arath/ref/Ath.fa", minSize=2000):
-
+    
+    minchr=3
     if len(sys.argv)>4:
         bam, fasta, outdir, ref = sys.argv[1:5]
         bam = [bam]
+    if len(sys.argv)>5:
+        minchr = int(sys.argv[5])
         
     if not os.path.isdir(outdir):
         os.makedirs(outdir)
     
-    clusters = bam2clusters(bam, fasta, outdir, minSize=minSize)
+    clusters = bam2clusters(bam, fasta, outdir, minSize=minSize, minchr=minchr)
     
     
     # generate & load contig2chrom
@@ -491,8 +494,8 @@ def test(bam=["/mnt/data/lpryszcz/cluster/hic/arath/idba/SRR2626163.contig.fa.ba
         _votes = [1 if c2chr[_c]==chrom else 0 for _c in cluster if _c in c2chr]
         csize = sum([contig2size[_c] for _c in cluster if _c in c2chr and c2chr[_c]==chrom])
         size = sum([contig2size[_c] for _c in cluster if _c in c2chr])
-        if len(cluster)>100:
-            print i, len(cluster), chrom, round(np.mean(_votes),3), csize, round(1.*csize/size,3), c.most_common(3)
+        #if len(cluster)>100:
+        print i, len(cluster), chrom, round(np.mean(_votes),3), csize, round(1.*csize/size,3), c.most_common(3)
         votes += _votes
         totcsize += csize
         totsize += size
