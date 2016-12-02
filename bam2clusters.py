@@ -289,7 +289,8 @@ def estimate_distance_parameters(outbase, bam=None, mapq=10, contig2size=None, w
             if not maxc: continue
             for i, nc in Counter(np.digitize(c2dists[c], dists, right=True)).iteritems():
                 # normalise contact per 1M
-                nc = 1.* nc / maxc
+                nc = 1e6*nc / sum(c2dists[c])
+                #nc = 1.* nc / maxc
                 contacts[i-1].append(nc)
         # remove empty # skip first window (contacts to other chromosomes / contigs)
         _dists, _contacts = dists[1:-1], contacts[1:-1]
@@ -475,13 +476,8 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
         params = pickle.load(open(outbase+".distance.params"))
             
     # get clusters on transformed matrix
-    #logger("Clustering...")
-    #params = estimate_distance_parameters(outbase, bam, mapq, contig2size, minSize)
-    normalisation = lambda x: 1.*(x+1)/np.max(x+1)
-    d = normalisation(d) 
-    transform = lambda x: distance_func(x, *params)
-    #transform = lambda x: np.log(np.max(x+1., axis=0) / (x+1))
-    #transform = lambda x: 1 - (x+1) / np.max(x+1) 
+    #transform = lambda x: distance_func(x+1, *params)
+    transform = lambda x: np.sum(x+1.) / (1e6*(x+1))
     clusters = cluster_contigs(outbase, transform(d), bin_chr, bin_position, dpi=dpi, minchr=minchr)
     
     # skip empty clusters
