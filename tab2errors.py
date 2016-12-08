@@ -25,11 +25,20 @@ def get_best_chr(matches):
 	for qstart, qend, t, tstart, tend, strand in matches:
 		total_alg += tend-tstart
 		talg[t] += tend-tstart
-	return talg.most_common(1)[0], total_alg
+	bestt, talg = talg.most_common(1)[0]
+	
+	strandc = Counter()
+	for qstart, qend, t, tstart, tend, strand in matches:
+		if t!=bestt: 
+			continue
+		strandc[strand] += tend-tstart
+	beststrand, salg = strandc.most_common(1)[0]#; print strandc
+	return bestt, talg, beststrand, total_alg
 
-def get_blocks(matches, bestt):
+def get_blocks(matches, bestt, beststrand):
 	"""Parse matches and report synteny blocks"""
-	blocks = [[matches[0][2:6],]]
+	qstart, qend, t, tstart, tend, strand = matches[0]
+	blocks = [[(t, tstart, tend-tstart, strand),]]#matches[0][2:6],]]
 	event = False
 	reverse = False
 	for i in xrange(1, len(matches)):
@@ -37,15 +46,15 @@ def get_blocks(matches, bestt):
 		# inversion or inter-chromosomal translocation 
 		# or intra-chromosomal translocation: tstart < previos for + or tstart > previous for -
 		if strand != matches[i-1][-1] or t != matches[i-1][2] \
-		  or matches[i-1][-1] == "+" and tstart < matches[i-1][3]\
-		  or matches[i-1][-1] == "-" and tstart > matches[i-1][3]:
+		  or strand == "+" and tstart < matches[i-1][3]\
+		  or strand == "-" and tstart > matches[i-1][3]:
 			blocks.append([])
 		elif blocks[-1]:
 			# get gap size difference
 			estgap = abs(qstart-matches[-1][1])
 			trugap = abs(tstart-matches[-1][4])
 		# add match
-		blocks[-1].append(matches[i][2:6])
+		blocks[-1].append((t, tstart, tend-tstart, strand))#matches[i][2:6])
 	return blocks
 
 def get_name(name): return name.split()[0].split('|')[-1].split('.')[0]
@@ -85,13 +94,11 @@ def process_hits(ref, fasta, identityTh=0.9, overlapTh=.66, minscore=100, thread
     # process queries by descending size
     tblocks = []
     print "# query\tbest target\taligned\tbest target size\t[%]\tquery aligned\tquery size\t[%]\tno of blocks"
-    for i, q in enumerate(['scaffold1',], 1): #enumerate(sorted(queries, key=lambda x: queries[x], reverse=True), 1): # 
-    	# no need to sort - last-split is sorting already...
-    	# sort by ascending query position
-    	#q2matches[q].sort()
+    for i, q in enumerate(sorted(queries, key=lambda x: queries[x], reverse=True), 1): # 
 	    # get best chromosome match
-		(bestt, talg), total_alg = get_best_chr(q2matches[q])
-		blocks = get_blocks(q2matches[q], bestt)
+		bestt, talg, beststrand, total_alg = get_best_chr(q2matches[q])
+		if bestt != 'CP002688': continue 
+		blocks = get_blocks(q2matches[q], bestt, beststrand)
 		print q, bestt, talg, targets[bestt], 100.*talg/targets[bestt], total_alg, queries[q], 100.*total_alg/queries[q], len(blocks)
 		tblocks += blocks
 		#'''
