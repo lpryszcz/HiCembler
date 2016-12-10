@@ -36,41 +36,108 @@ def get_best_chr(matches):
 	beststrand, salg = strandc.most_common(1)[0]#; print strandc
 	return bestt, talg, beststrand, total_alg
 
+def intra_translocation_end(beststrand, tstart, blocks, lasti=-2):#+blocks[lasti][-1][2]
+	if beststrand == "+" and tstart > blocks[lasti][-1][1] \
+	  or beststrand == "-" and tstart < blocks[lasti][-1][1]: 
+		return True
+	return False
+
 events = ["correct", "inversion", "intra-chr translocation", "inter-chr translocation"]
-def get_blocks(matches, bestt, beststrand):
+def get_blocks(matches, bestt, beststrand, maxtranfrac=0.1):
 	"""Parse matches and report synteny blocks"""
-	qstart, qend, t, tstart, tend, strand = matches[0]
-	blocks = [[(t, tstart, tend-tstart, strand),]]#matches[0][2:6],]]
-	breaks = [events[0]]
-	event = False
-	reverse = False
-	for i in xrange(1, len(matches)):
-		qstart, qend, t, tstart, tend, strand = matches[i]#; print matches[i]
-		# 1 inversion 
-		if strand != matches[i-1][-1]:
-			blocks.append([])
-			if strand!=beststrand: 
-				breaks.append(events[1])
+	blocks, breaks = [], []
+	# populate until bestt found
+	for i, (qstart, qend, t, tstart, tend, strand) in enumerate(matches, 1):
+		if t!=bestt: 
+			if not blocks:
+				breaks.append(events[3])
+				blocks.append([])
+			elif t!=blocks[-1][-1][0]:
+				breaks.append(events[3])
+				blocks.append([])
+			blocks[-1].append((t, tstart, tend-tstart, strand))
+		elif strand!=beststrand: 
+			breaks.append(events[1])
+			break
+		else: 
+			breaks.append(events[0])
+			break
+	blocks.append([(t, tstart, tend-tstart, strand)])
+
+	lasti = -2
+	large_intra_translocation = False
+	for i in xrange(i, len(matches)):
+		qstart, qend, t, tstart, tend, strand = matches[i]
+		#print bestt, filter(lambda x: x[-1][0]==bestt, blocks)[-1][-1][-1], blocks
+		#if i>5: break
+		#if not filter(lambda x: x[-1][0]==bestt, blocks): print bestt, blocks
+		# get end of intra-chr translocation
+		if breaks[-1] == events[2]: 
+			if intra_translocation_end(beststrand, tstart, blocks, lasti) or large_intra_translocation:
+				# mark previous as translocation if smaller
+				if sum(b[2] for b in blocks[lasti]) < sum(b[2] for b in blocks[-1]):
+					#print "translocation changing order"
+					breaks[lasti] = events[2]
+					breaks[-1] = events[0]
+				large_intra_translocation = False
+				lasti = -2
 			else:
+				blocks[-1].append((t, tstart, tend-tstart, strand))
+				continue
+		# 3 inter-chromosomal translocation - this has to be first
+		if t != matches[i-1][2]:
+			blocks.append([])
+			if t != bestt:
+				breaks.append(events[3])
+			elif strand != beststrand:
+				breaks.append(events[1])				
+			else:
+				breaks.append(events[0])
+		# 1 inversion - this has to be last; skip inter-chr translocations
+		elif strand != filter(lambda x: x[-1][0]==bestt, blocks)[-1][-1][-1]:#matches[i-1][-1]:
+			blocks.append([])
+			if strand != beststrand: 
+				breaks.append(events[1])
+			else: 
+				# reverse inverted block HERE!
 				breaks.append(events[0])
 		# 2 or intra-chromosomal translocation: tstart < previos for + or tstart > previous for -
-		elif strand == "+" and tstart < matches[i-1][3] or strand == "-" and tstart > matches[i-1][3]:
+		elif beststrand == "+" and tstart < filter(lambda x: x[-1][0]==bestt, blocks)[-1][-1][1] \
+		  or beststrand == "-" and tstart > filter(lambda x: x[-1][0]==bestt, blocks)[-1][-1][1]:
+		  	# split previous block, but ignore iter-chr translocation blocks
+		  	lasti = [ii for ii, e in enumerate(breaks) if e!=events[3]][-1]
+		  	if len(blocks[lasti])>1:
+		  		lastblock = blocks[lasti]
+		  		idx = [ii for ii, b in enumerate(lastblock, 1) \
+		  				if beststrand=="+" and b[1]<tstart \
+		  				or beststrand=="-" and b[1]>tstart]
+		  		if idx and idx[-1] and idx[-1]<len(lastblock):
+		  			blocks[lasti] = lastblock[:idx[-1]]
+		  			blocks.append(lastblock[idx[-1]:])
+		  			breaks.append(events[0])
 			blocks.append([])
 			breaks.append(events[2])
-			# need to get end of intra-translocation! but how?
-		# 3 inter-chromosomal translocation
-		elif t != matches[i-1][2]:
+			# check for large intra-translocation ie. involving chr arm >10% of chr
+			transsize = 0
+			for m in filter(lambda x: x[2]==bestt, matches[i+1:]): 
+				if intra_translocation_end(beststrand, m[3], blocks, lasti): 
+					break
+				transsize += m[4]-m[3]
+			#if bestt=="CP002688": print transsize, sum(m[4]-m[3] for m in filter(lambda x: x[2]==bestt, matches))
+			if transsize > maxtranfrac*sum(m[4]-m[3] for m in filter(lambda x: x[2]==bestt, matches)):
+				large_intra_translocation = True
+		# stop large intra-chr translocation with correct block
+		elif breaks[-1] == events[2]:
 			blocks.append([])
-			if t!=bestt:
-				breaks.append(events[3])
-			else:
-				breaks.append(events[0])
-		elif blocks[-1]:
+			breaks.append(events[0])
+		'''	
+		if blocks[-1]:
 			# get gap size difference
 			estgap = abs(qstart-matches[-1][1])
 			trugap = abs(tstart-matches[-1][4])
+		'''
 		# add match
-		blocks[-1].append((t, tstart, tend-tstart, strand))#matches[i][2:6])
+		blocks[-1].append((t, tstart, tend-tstart, strand))						
 	return blocks, breaks
 
 def process_hits(ref, fasta):
@@ -96,12 +163,11 @@ def process_hits(ref, fasta):
 			types[t] += 1
 			typesizes[t] += sum(b[2] for b in block)
 		'''
-		if bestt != 'CP002688': continue 
+		if bestt != 'CP002684': continue 
 		for i, (block, t) in enumerate(zip(blocks, breaks), 1): 
-			print i, len(block), block[:2], block[-2:]
+			print i, t, len(block), block[:2], block[-2:]
 		print types, sum(types.values())
 		print talg, sum(typesizes.values()), typesizes
-		return 
 		#'''
 		# report
 		data = [q, bestt, talg, targets[bestt], 100.*talg/targets[bestt]]
@@ -130,6 +196,8 @@ def get_matches(ref, fasta, identityTh=0.9, overlapTh=.66, minscore=100, threads
             continue
         # unpack
         (score, t, tstart, talg, tstrand, tsize, q, qstart, qalg, qstrand, qsize, blocks) = l.split()[:12]
+        # skip human patches
+        if t.startswith(("GL","KI")): continue
         (score, qstart, qalg, qsize, tstart, talg, tsize) = map(int, (score, qstart, qalg, qsize, tstart, talg, tsize))
         if score<minscore:
         	continue
