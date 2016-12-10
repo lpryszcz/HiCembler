@@ -201,7 +201,7 @@ def get_matches(ref, fasta, identityTh=0.9, overlapTh=.66, minscore=100, threads
         (score, qstart, qalg, qsize, tstart, talg, tsize) = map(int, (score, qstart, qalg, qsize, tstart, talg, tsize))
         if score<minscore:
         	continue
-        if tstrand == "-":
+        if tstrand == "-": 
         	qstart = qsize - qalg - qstart
         t = get_name(t)
         qend, tend = qstart + qalg, tstart + talg
