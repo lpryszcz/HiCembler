@@ -380,6 +380,10 @@ def main():
     parser.add_argument("--minWindows", default=2, type=int,
                         help="minimum number of windows per contig, has to be >1 [%(default)s]")
 
+    # print help if no parameters
+    if len(sys.argv)==1:
+        parser.print_help()
+        sys.exit(1)
     o = parser.parse_args()
     if o.verbose:
         sys.stderr.write("Options: %s\n"%str(o))
