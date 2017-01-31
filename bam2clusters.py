@@ -34,14 +34,17 @@ os.environ["PATH"] = "%s:%s"%(':'.join(paths), os.environ["PATH"])
 
 def normalize(d, max_iter=1000, epsilon=0.00001):
     """Return fully balanced matrix"""
+    print "SK norm 0-1"
     from sinkhorn_knopp import sinkhorn_knopp
     sk = sinkhorn_knopp.SinkhornKnopp(max_iter=max_iter, epsilon=epsilon)
     # make symmetric & normalise
     d += d.T - np.diag(d.diagonal())
     d += 1
+    print d.max(), d.mean(), d.sum()
     vmax = d.max()
     d = sk.fit(d/vmax)
-    d *= vmax / d.max()
+    #d *= vmax / d.max()
+    print d.max(), d.mean(), d.sum()
     return d
 
 def normalize_diagional(d, bin_chr, bin_position):
@@ -468,7 +471,7 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
         # get array from bam
         logger("Parsing BAM...")
         d, c2dists = bam2array(windows, contig2size, chr2window, bam,  mapq, upto, threads=threads, minSize=minSize)
-        
+
         # save windows, array and plot
         logger("Saving array...")
         with gzip.open(outbase + ".windows.tab.gz", "w") as out:
@@ -484,9 +487,11 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
         d = npy[npy.files[0]]
         params = pickle.load(open(outbase+".distance.params"))
             
-    # make symmetric
+    # make symmetric - not neede if SK norm
     d += d.T - np.diag(d.diagonal())
-            
+    #d = normalize(d)
+    #params = estimate_distance_parameters(outbase, contig2size=contig2size, c2dists=c2dists, windowSize=minSize)
+                    
     # get clusters on transformed matrix
     transform = lambda x: distance_func(x+1, *params); print "dist"
     #transform = lambda x: np.sum(x+1.) / (1e6*(x+1)); print "sum / xM"
