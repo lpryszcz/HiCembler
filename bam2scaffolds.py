@@ -325,7 +325,7 @@ def report_scaffolds(outbase, scaffolds, faidx, w=60):
     logger(" %s in %s scaffolds reported to %s"%(totsize, len(scaffolds), fastafn))
     return fastafn
     
-def bam2scaffolds(bam, fasta, outdir, minSize, windowSizes, mapq, threads, dpi, upto, minWindows, verbose):
+def bam2scaffolds(bam, fasta, outdir, minSize, windowSizes, mapq, threads, dpi, upto, minWindows, nchr, verbose):
     """Report scaffolds based on BAM file"""
     faidx = FastaIndex(fasta)
 
@@ -340,7 +340,7 @@ def bam2scaffolds(bam, fasta, outdir, minSize, windowSizes, mapq, threads, dpi, 
     logger(" Selected %s window sizes <= %s kb: %s"%(len(windowSizes), int(maxwindow), str(windowSizes)))
 
     # calculate clusters for various window size
-    clusters = bam2clusters(bam, fasta, outdir, minSize, mapq, threads, dpi, upto, verbose)
+    clusters = bam2clusters(bam, fasta, outdir, minSize, mapq, threads, dpi, upto, nchr, verbose)
     
     for windowSize in windowSizes:
         outbase = os.path.join(outdir,"auto.%sk"%windowSize)
@@ -369,6 +369,8 @@ def main():
                         help="window size in kb used for scaffolding [%(default)s]")
     parser.add_argument("-m", "--minSize", default=2000, type=int,
                         help="minimum contig length [%(default)s]")
+    parser.add_argument("-n", "--nchr", default=0, type=int,
+                        help="no. of chromosomes [estimate from data]")
     parser.add_argument("-q", "--mapq", default=10, type=int,
                         help="mapping quality [%(default)s]")
     parser.add_argument("-u", "--upto", default=0, type=float,
@@ -403,7 +405,7 @@ def main():
         
     # process
     bam2scaffolds(o.bam, o.fasta, o.outdir, o.minSize, o.windowSize, o.mapq, o.threads,
-                  o.dpi, o.upto, o.minWindows, o.verbose)
+                  o.dpi, o.upto, o.minWindows, o.nchr, o.verbose)
 
 if __name__=='__main__': 
     t0 = datetime.now()
