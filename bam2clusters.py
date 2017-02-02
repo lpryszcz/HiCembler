@@ -395,7 +395,8 @@ def cluster_contigs(outbase, d, bin_chr, bin_position, threads=4, frac=0.66,
     logger(" Estimating number of chromosomes...")
     prng = np.random#.RandomState(seed)
     Z = fastcluster.linkage(d[np.triu_indices(d.shape[0], 1)], method="ward")
-    
+
+    # estimate chromosome number if not specified
     if not nchr:
         dZ = []
         n = d.shape[0]
