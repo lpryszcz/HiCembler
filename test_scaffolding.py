@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 
 import os, sys
 root = os.path.dirname(os.path.abspath(sys.argv[0]))
