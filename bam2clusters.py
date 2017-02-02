@@ -440,14 +440,14 @@ def cluster_contigs(outbase, d, bin_chr, bin_position, threads=4, frac=0.66,
         clusters[i].append(c)
     return clusters
     
-def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, upto=0, verbose=1,
-                 minchr=3, method="ward"):
+def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, upto=0, nchr=0,
+                 verbose=1, minchr=3, method="ward"):
     """Return clusters computed from from windowSizes"""
     logger("=== Clustering ===")
-    outbase = os.path.join(outdir, "auto")
+    outbase = os.path.join(outdir, "chr_%s"%nchr if nchr else "auto")
     
     # load clusters
-    fname = outbase + ".clusters.tab_"
+    fname = outbase + ".clusters.tab"
     if os.path.isfile(fname):
         clusters = [l[:-1].split('\t') for l in open(fname)]
         logger("  %s clusters loaded."%len(clusters))
@@ -494,7 +494,7 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
     #transform = lambda x: np.max(x+1.) / (x+1) - 1; print "max/x - 1"
     #transform = lambda x: np.log(np.max(x+1))-np.log(x+1); print "log max x - log x"
     #transform = lambda x: np.log(np.max(x+1, axis=0))-np.log(x+1); print "log max x0 - log x"
-    clusters = cluster_contigs(outbase, transform(d), bin_chr, bin_position, dpi=dpi, minchr=minchr)
+    clusters = cluster_contigs(outbase, transform(d), bin_chr, bin_position, dpi=dpi, minchr=minchr, nchr=nchr)
     
     # skip empty clusters
     clusters = filter(lambda x: x, clusters)
@@ -524,6 +524,8 @@ def main():
     parser.add_argument("-o", "--outdir", required=1, help="output name")
     parser.add_argument("-m", "--minSize", default=2000, type=int,
                         help="minimum contig length (N90 or larger) [%(default)s]")
+    parser.add_argument("-n", "--nchr", default=0, type=int,
+                        help="no. of chromosomes [estimate from data]")
     parser.add_argument("--minchr", default=3, type=int,
                         help="minimum no. of chromosomes [%(default)s] has to be >2")
     parser.add_argument("-q", "--mapq", default=10, type=int,
@@ -553,7 +555,8 @@ def main():
         os.makedirs(o.outdir)
         
     # process
-    bam2clusters(o.bam, o.fasta, o.outdir, o.minSize, o.mapq, o.threads, o.dpi, o.upto, o.verbose, o.minchr)
+    bam2clusters(o.bam, o.fasta, o.outdir, o.minSize, o.mapq, o.threads, o.dpi, o.upto, o.nchr, 
+                 o.verbose, o.minchr)
         
 if __name__=='__main__': 
     t0 = datetime.now()
