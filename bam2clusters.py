@@ -393,48 +393,49 @@ def worker(args):
     return np.diff(iZ[:, 2])
 
 def cluster_contigs(outbase, d, bin_chr, bin_position, threads=4, frac=0.66,
-                    iterations=30, maxnumchr=500, seed=0, dpi=100, minchr=3):
+                    iterations=30, maxnumchr=500, seed=0, dpi=100, minchr=3, nchr=0):
     """Estimate number of chromosomes and assign contigs to chromosomes"""
     logger(" Estimating number of chromosomes...")
     prng = np.random#.RandomState(seed)
     Z = fastcluster.linkage(d[np.triu_indices(d.shape[0], 1)], method="ward")
     
-    dZ = []
-    n = d.shape[0]
-    subset = int(round(n * frac))
-    if subset < maxnumchr:
-        maxnumchr = subset-1
-    ''' 24 vs 31s on 4 cores - it's not worth as need to pickle large matrix and pass it through
-    args = (d[prng.permutation(n)[:subset], :][:, prng.permutation(n)[:subset]] for i in range(iterations))
-    p = Pool(threads)
-    for i, _dZ in enumerate(p.imap_unordered(worker, args), 1):
-        sys.stderr.write(' %s / %s  \r'%(i, iterations))
-        dZ.append(_dZ)
-    '''
-    for i in range(iterations):
-        sys.stderr.write(' %s / %s  \r'%(i+1, iterations))
-        selection = prng.permutation(n)[:subset]
-        iZ = fastcluster.linkage(d[selection, :][:, selection][np.triu_indices(subset, 1)], method="ward")
-        dZ.append(np.diff(iZ[:, 2]))
-    #'''
-    # get number of chromosomes
-    mean_step_len = np.mean(np.array(dZ), 0)
-    nchr = np.argmax(mean_step_len[-minchr+1::-1][:maxnumchr]) + minchr
-    logger("  number of chromosomes: %s"%nchr)
-    
-    plt.figure(figsize = (15, 5))
-    plt.title("Number of clusters estimation")
-    plt.plot(np.arange(maxnumchr, 1, -1), mean_step_len[-maxnumchr+1:], 'b') 
-    plt.gca().invert_xaxis()
-    plt.xlabel('number of clusters')
-    plt.savefig(outbase+'.avg_step_len.svg', dpi=dpi)
+    if not nchr:
+        dZ = []
+        n = d.shape[0]
+        subset = int(round(n * frac))
+        if subset < maxnumchr:
+            maxnumchr = subset-1
+        ''' 24 vs 31s on 4 cores - it's not worth as need to pickle large matrix and pass it through
+        args = (d[prng.permutation(n)[:subset], :][:, prng.permutation(n)[:subset]] for i in range(iterations))
+        p = Pool(threads)
+        for i, _dZ in enumerate(p.imap_unordered(worker, args), 1):
+            sys.stderr.write(' %s / %s  \r'%(i, iterations))
+            dZ.append(_dZ)
+        '''
+        for i in range(iterations):
+            sys.stderr.write(' %s / %s  \r'%(i+1, iterations))
+            selection = prng.permutation(n)[:subset]
+            iZ = fastcluster.linkage(d[selection, :][:, selection][np.triu_indices(subset, 1)], method="ward")
+            dZ.append(np.diff(iZ[:, 2]))
+        #'''
+        # get number of chromosomes
+        mean_step_len = np.mean(np.array(dZ), 0)
+        nchr = np.argmax(mean_step_len[-minchr+1::-1][:maxnumchr]) + minchr
+        logger("  number of chromosomes: %s"%nchr)
 
-    plt.figure()
-    plt.title("Number of clusters estimation")
-    plt.plot(np.arange(50, 1, -1), mean_step_len[-50+1:], 'b')
-    plt.gca().invert_xaxis()
-    plt.xlabel('number of clusters')
-    plt.savefig(outbase+'.avg_step_len_50.svg', dpi=dpi)
+        plt.figure(figsize = (15, 5))
+        plt.title("Number of clusters estimation")
+        plt.plot(np.arange(maxnumchr, 1, -1), mean_step_len[-maxnumchr+1:], 'b') 
+        plt.gca().invert_xaxis()
+        plt.xlabel('number of clusters')
+        plt.savefig(outbase+'.avg_step_len.svg', dpi=dpi)
+
+        plt.figure()
+        plt.title("Number of clusters estimation")
+        plt.plot(np.arange(50, 1, -1), mean_step_len[-50+1:], 'b')
+        plt.gca().invert_xaxis()
+        plt.xlabel('number of clusters')
+        plt.savefig(outbase+'.avg_step_len_50.svg', dpi=dpi)
                           
     logger(" Assigning contigs to chromosomes...")
     clusters = [[] for n in range(nchr)]
