@@ -343,7 +343,7 @@ def bam2scaffolds(bam, fasta, outdir, minSize, windowSizes, mapq, threads, dpi, 
     clusters = bam2clusters(bam, fasta, outdir, minSize, mapq, threads, dpi, upto, nchr, verbose)
     
     for windowSize in windowSizes:
-        outbase = os.path.join(outdir,"auto.%sk"%windowSize)
+        outbase = os.path.join(outdir,"%s.%sk"%("chr_%s"%nchr if nchr else "auto", windowSize))
         
         logger("=== %sk windows ==="%windowSize)
         logger("Constructing scaffolds...")
