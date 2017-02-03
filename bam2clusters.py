@@ -455,7 +455,7 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
     fname = outbase + ".clusters.tab"
     if os.path.isfile(fname):
         clusters = [l[:-1].split('\t') for l in open(fname)]
-        logger("  %s clusters loaded from %s."%(len(clusters), fname)
+        logger("  %s clusters loaded from %s."%(len(clusters), fname))
         return clusters
 
     # get windows
