@@ -15,7 +15,7 @@ On most Linux distros, the installation should be as easy as:
 .. code-block:: bash
 
     sudo -H pip install -U matplotlib numpy scipy fastcluster pysam ete3
-    git clone --recursive https://github.com/lpryszcz/redundans.git
+    git clone --recursive https://github.com/lpryszcz/HiCembler.git
     cd HiCembler
     (cd bin/snap && make clean && make)
     (cd bin/idba && ./build.sh && ./configure && make)
