@@ -24,7 +24,8 @@ On most Linux distros, the installation should be as easy as:
 Dependencies
 ~~~~~~~~~~~~
 - Python dependencies: matplotlib, numpy, scipy, sklearn, fastcluster, pysam, ete3, `sinkhorn_knopp <https://github.com/btaba/sinkhorn_knopp>`_
-.. code-block:: bash    
+.. code-block:: bash
+                
    sudo -H pip install -U matplotlib numpy scipy sklearn fastcluster pysam ete3 sinkhorn_knopp
 
 - `SNAP aligner <https://github.com/amplab/snap>`_
