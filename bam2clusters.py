@@ -4,6 +4,7 @@ desc="""Cluster contigs based on contact matrix from BAM file.
 TBD:
 - better clustering
 - improve speed
+- report sub-optimal chromosome numbers
 """
 epilog="""Author: l.p.pryszcz+git@gmail.com
 Bratislava, 27/10/2016
