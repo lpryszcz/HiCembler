@@ -14,7 +14,7 @@ On most Linux distros, the installation should be as easy as:
 
 .. code-block:: bash
 
-    sudo -H pip install -U matplotlib numpy scipy fastcluster pysam ete3
+    sudo -H pip install -U matplotlib numpy scipy sklearn fastcluster pysam ete3 sinkhorn_knopp
     git clone --recursive https://github.com/lpryszcz/HiCembler.git
     cd HiCembler
     (cd bin/snap && make clean && make)
@@ -24,10 +24,6 @@ On most Linux distros, the installation should be as easy as:
 Dependencies
 ~~~~~~~~~~~~
 - Python dependencies: matplotlib, numpy, scipy, sklearn, fastcluster, pysam, ete3, `sinkhorn_knopp <https://github.com/btaba/sinkhorn_knopp>`_
-.. code-block:: bash
-                
-   sudo -H pip install -U matplotlib numpy scipy sklearn fastcluster pysam ete3 sinkhorn_knopp
-
 - `SNAP aligner <https://github.com/amplab/snap>`_
 - `IDBA <https://github.com/loneknightpy/idba>`_ optionally
 
