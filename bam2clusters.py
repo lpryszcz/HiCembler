@@ -70,8 +70,9 @@ def logger(message, log=sys.stdout):
     memory = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
     log.write("[%s] %s    [memory: %6i Mb]\n"%(datetime.ctime(datetime.now()), message, memory))
     
-def contigs2windows(fasta, minSize=2000, verbose=0, genomeFrac=0.95):
+def contigs2windows(fasta, minSize=2000, verbose=0, genomeFrac=0.95, contigs=[]):
     """Return one window per contig, filtering out contigs shorter than minSize"""
+    contigs = set(contigs)
     genomeSize = 0
     windows, skipped, chr2window,  = [], [], {}
     # get N90 & update minSize if smaller
@@ -89,6 +90,9 @@ def contigs2windows(fasta, minSize=2000, verbose=0, genomeFrac=0.95):
         size = contig2size[c]
         if size < minSize:
             skipped.append(size)
+            continue
+        # skip if not in selected contigs
+        elif contigs and c not in contigs:
             continue
         # store chr2window info and append window
         chr2window[c] = len(windows)
@@ -447,10 +451,16 @@ def cluster_contigs(outbase, d, bin_chr, bin_position, threads=4, frac=0.66,
     return clusters
     
 def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, upto=0, nchr=0,
-                 verbose=1, minchr=3, method="ward"):
+                 verbose=1, minchr=3, method="ward", contigs=[]):
     """Return clusters computed from from windowSizes"""
     logger("=== Clustering ===")
     outbase = os.path.join(outdir, "chr_%s"%nchr if nchr else "auto")
+
+    # link with auto
+    if nchr and os.path.isfile(os.path.join(outdir, "auto.npz")) and not os.path.isfile(outbase+".npz"):
+        logger(" reusing %s/auto.* ..."%outbase)
+        for ext in (".npz", ".windows.tab.gz", ".distance.params"):
+            os.system("ln -s auto%s %s%s"%(ext, outbase, ext))
     
     # load clusters
     fname = outbase + ".clusters.tab"
@@ -460,7 +470,7 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
         return clusters
 
     # get windows
-    minSize, windows, chr2window, contig2size = contigs2windows(fasta, minSize, verbose)
+    minSize, windows, chr2window, contig2size = contigs2windows(fasta, minSize, verbose, contigs=contigs)
     
     # generate missing handles
     bin_chr, bin_position = [], []

@@ -325,7 +325,8 @@ def report_scaffolds(outbase, scaffolds, faidx, w=60):
     logger(" %s in %s scaffolds reported to %s"%(totsize, len(scaffolds), fastafn))
     return fastafn
     
-def bam2scaffolds(bam, fasta, outdir, minSize, windowSizes, mapq, threads, dpi, upto, minWindows, nchr, verbose):
+def bam2scaffolds(bam, fasta, outdir, minSize, windowSizes, mapq, threads, dpi, upto, minWindows, nchr,
+                  verbose, metagenomics=0, contigs=[]):
     """Report scaffolds based on BAM file"""
     faidx = FastaIndex(fasta)
 
@@ -340,7 +341,11 @@ def bam2scaffolds(bam, fasta, outdir, minSize, windowSizes, mapq, threads, dpi, 
     logger(" Selected %s window sizes <= %s kb: %s"%(len(windowSizes), int(maxwindow), str(windowSizes)))
 
     # calculate clusters for various window size
-    clusters = bam2clusters(bam, fasta, outdir, minSize, mapq, threads, dpi, upto, nchr, verbose)
+    clusters = bam2clusters(bam, fasta, outdir, minSize, mapq, threads, dpi, upto, nchr, verbose, contigs=contigs)
+
+    # if metagenomics first pass, just return clusters
+    if metagenomics:
+        return clusters
     
     for windowSize in windowSizes:
         outbase = os.path.join(outdir,"%s.%sk"%("chr_%s"%nchr if nchr else "auto", windowSize))
@@ -359,7 +364,7 @@ def main():
     usage   = "%(prog)s -v" #usage=usage, 
     parser  = argparse.ArgumentParser(description=desc, epilog=epilog, \
                                       formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('--version', action='version', version='1.01e')   
+    parser.add_argument('--version', action='version', version='1.01g')   
     parser.add_argument("-v", "--verbose", default=False, action="store_true",
                         help="verbose")    
     parser.add_argument("-i", "--bam", nargs="+", help="BAM file(s)")
@@ -381,6 +386,8 @@ def main():
                         help="output images dpi [%(default)s]")
     parser.add_argument("--minWindows", default=2, type=int,
                         help="minimum number of windows per contig, has to be >1 [%(default)s]")
+    parser.add_argument("--meta", "--metagenomics", action='store_true', help="switch to metagenomics sample")
+    parser.add_argument("--metanspecies", default=0, type=int, help="no. of species [estimate from data]")
 
     # print help if no parameters
     if len(sys.argv)==1:
@@ -402,10 +409,27 @@ def main():
         #sys.exit(1)
     else:
         os.makedirs(o.outdir)
+
+    
+    # metagenomics sample
+    if o.meta or o.metanspecies:
+        logger(" Metagenomic mode: estimating number of species and assigning contigs to species...")
+        clusters = bam2scaffolds(o.bam, o.fasta, o.outdir, o.minSize, o.windowSize, o.mapq, o.threads,
+                                 o.dpi, o.upto, o.minWindows, o.metanspecies, o.verbose, metagenomics=1)
+        # process each species
+        logger(" Metagenomic mode: scaffolding %s species..."%len(clusters))
+        for i, cluster in enumerate(clusters, 1):
+            spname = "species_%s"%i
+            logger("  %s..."%spname)
+            outdir = os.path.join(o.outdir, "clusters_%s"%len(clusters), spname)
+            bam2scaffolds(o.bam, o.fasta, outdir, o.minSize, o.windowSize, o.mapq, o.threads,
+                          o.dpi, o.upto, o.minWindows, o.nchr, o.verbose, contigs=cluster)
+            
         
-    # process
-    bam2scaffolds(o.bam, o.fasta, o.outdir, o.minSize, o.windowSize, o.mapq, o.threads,
-                  o.dpi, o.upto, o.minWindows, o.nchr, o.verbose)
+    else:
+        # process
+        bam2scaffolds(o.bam, o.fasta, o.outdir, o.minSize, o.windowSize, o.mapq, o.threads,
+                      o.dpi, o.upto, o.minWindows, o.nchr, o.verbose)
 
 if __name__=='__main__': 
     t0 = datetime.now()
