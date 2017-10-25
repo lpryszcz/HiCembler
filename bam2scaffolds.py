@@ -376,7 +376,7 @@ def main():
                         help="minimum contig length [%(default)s]")
     parser.add_argument("-n", "--nchr", default=0, type=int,
                         help="no. of chromosomes [estimate from data]")
-    parser.add_argument("-q", "--mapq", default=10, type=int,
+    parser.add_argument("-q", "--mapq", default=30, type=int,
                         help="mapping quality [%(default)s]")
     parser.add_argument("-u", "--upto", default=0, type=float,
                         help="process up to this number of reads from each library [all]")

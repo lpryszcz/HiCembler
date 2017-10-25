@@ -235,7 +235,7 @@ def main():
     parser.add_argument("-o", "--output", required=1, help="output name")
     parser.add_argument("-w", "--windowSize", nargs="+", default=[10000, 1000, 500, 200, 100, 50, 20, 10, 5, 2, 1], type=int,
                         help="window size in kb [%(default)s]")
-    parser.add_argument("-m", "--mapq", default=10, type=int,
+    parser.add_argument("-q", "--mapq", default=10, type=int,
                         help="mapping quality [%(default)s]")
     parser.add_argument("-u", "--upto", default=0, type=float,
                         help="process up to this number of reads from each library [all]")
