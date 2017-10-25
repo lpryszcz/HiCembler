@@ -288,7 +288,7 @@ def get_distances_contacts(bam, mapq, contig2size, windowSize, icontigs=5, upto=
     return dists, contacts
     
 def estimate_distance_parameters(outbase, bam=None, mapq=10, contig2size=None, windowSize=2000, \
-                                 skipfirst=5, icontigs=5, c2dists={}, limit=30, upto=1e7):
+                                 skipfirst=5, icontigs=5, c2dists={}, limit=30, upto=1e7, contigs=[]):
     """Return estimated fit parameters.
     bam, contig2size & windowSize or dists & contacts have to be provided.
     """
@@ -300,6 +300,9 @@ def estimate_distance_parameters(outbase, bam=None, mapq=10, contig2size=None, w
     else:
         dists = range(-windowSize, (limit+11)*windowSize, windowSize)
         contacts = [[] for i in range(len(dists)+1)]
+        # select only subset of contigs
+        if contigs:
+            contig2size = {c: s for c, s in contig2size.iteritems() if c in contigs}
         longest_contigs = sorted(contig2size, key=lambda x: contig2size[x], reverse=1)[:50]
         for c in longest_contigs:
             maxc = max(c2dists[c])
@@ -493,7 +496,8 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
             np.savez_compressed(out, d)
 
         # estimate parameters
-        params = estimate_distance_parameters(outbase, contig2size=contig2size, c2dists=c2dists, windowSize=minSize)
+        params = estimate_distance_parameters(outbase, contig2size=contig2size, c2dists=c2dists, windowSize=minSize,
+                                              contigs=contigs)
     # load from file
     else:
         npy = np.load(outbase+".npz")
