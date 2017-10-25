@@ -421,7 +421,11 @@ def main():
         for i, cluster in enumerate(clusters, 1):
             spname = "species_%s"%i
             logger("  %s..."%spname)
-            outdir = os.path.join(o.outdir, "clusters_%s"%len(clusters), spname)
+            # create dir
+            outdir = os.path.join(o.outdir, "chr_%s"%len(clusters), spname)
+            if not os.path.isdir(outdir):
+                os.makedirs(outdir)
+            # process
             bam2scaffolds(o.bam, o.fasta, outdir, o.minSize, o.windowSize, o.mapq, o.threads,
                           o.dpi, o.upto, o.minWindows, o.nchr, o.verbose, contigs=cluster)
             
