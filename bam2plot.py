@@ -20,6 +20,9 @@ from FastaIndex import FastaIndex
 from multiprocessing import Pool
 from collections import Counter
 
+from bam2clusters import normalize, normalize_diagional
+#from bam2scaffolds import normalize_rows
+
 def logger(message, log=sys.stdout):
     """Log messages"""
     memory = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
@@ -215,7 +218,8 @@ def bam2plot(fasta, bam, outbase, windowSize, mapq=10, threads=1,
 
         # make symmetric
         a += a.T - np.diag(a.diagonal())
-            
+        #a = normalize(a) * a.max()
+        
         if len(_windows)<5e4:
             plot(_outfn, a, genomeSize, base2chr, _windowSize, dpi)
         elif verbose:
@@ -227,7 +231,7 @@ def main():
     usage   = "%(prog)s -v" #usage=usage, 
     parser  = argparse.ArgumentParser(description=desc, epilog=epilog, \
                                       formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('--version', action='version', version='1.0b')   
+    parser.add_argument('--version', action='version', version='1.0c')   
     parser.add_argument("-v", "--verbose", default=False, action="store_true",
                         help="verbose")    
     parser.add_argument("-i", "--bam", nargs="+", help="BAM files")

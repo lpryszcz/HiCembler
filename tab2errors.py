@@ -15,7 +15,7 @@ def generate_tab(ref, fasta, threads=4):
 		if not os.path.isfile("%s.suf"%ref):
 			os.system("lastdb %s %s"%(ref, ref))
         # generate chromosome to tab
-		cmd0 = "lastal -l 100 -C 2 -P %s %s %s | last-split - | maf-convert tab - | gzip > %s.tab.gz"
+		cmd0 = "lastal -l100 -C2 -P %s %s %s | last-split - | maf-convert tab - | gzip > %s.tab.gz"
 		os.system(cmd0%(threads, ref, fasta, fasta))
 	return "%s.tab.gz"%fasta
 
@@ -140,7 +140,7 @@ def get_blocks(matches, bestt, beststrand, maxtranfrac=0.1):
 		blocks[-1].append((t, tstart, tend-tstart, strand))						
 	return blocks, breaks
 
-def process_hits(ref, fasta):
+def process_hits(ref, fasta, out=sys.stdout):
 	"""Report rearrengements from assembly"""
 	q2matches, queries, targets = get_matches(ref, fasta)
     # process queries by descending size
@@ -148,7 +148,7 @@ def process_hits(ref, fasta):
 	header = "# query\tbest target\taligned\tbest target size\t[%]\tquery aligned\tquery size\t[%]\t# blocks"
 	for e in events: 
 		header += "\t# %s\t%s [bp]\t[%s]" % (e, e, '%')
-	print header
+	out.write(header+"\n")
 	totdata = np.zeros(header.count('\t')-1)
 	for i, q in enumerate(sorted(queries, key=lambda x: queries[x], reverse=True), 1): # 
 	    # get best chromosome match
@@ -174,7 +174,7 @@ def process_hits(ref, fasta):
 		data += [total_alg, queries[q], 100.*total_alg/queries[q], len(blocks)]
 		for e in events:
 			data += [types[e], typesizes[e], 100.*typesizes[e]/sum(typesizes.values())]
-		print "\t".join(map(str, data))
+		out.write("\t".join(map(str, data)+"\n"))
 		totdata += data[2:]
 	# recaulculate %
 	totdata[2] = 100.*totdata[0]/totdata[1]
@@ -182,12 +182,11 @@ def process_hits(ref, fasta):
 	indices = [8,11,14,17]#; print sum(totdata[indices])
 	for i in indices: 
 		totdata[i+1] = 100.*totdata[i]/sum(totdata[indices])
-	print "SUM\t-\t"+"\t".join(map(str, totdata))
+	out.write("SUM\t-\t"+"\t".join(map(str, totdata))+'\n')
 
 def get_name(name): return name.split()[0].split('|')[-1].split('.')[0]
 
 def get_matches(ref, fasta, identityTh=0.9, overlapTh=.66, minscore=100, threads=4):
-    """Generate & process LASTal hits"""
     # execute last and get best query-to-reference matches only
     tabfn = generate_tab(ref, fasta, threads)
     q2matches, queries, targets = {}, {}, {}
@@ -218,12 +217,19 @@ def get_matches(ref, fasta, identityTh=0.9, overlapTh=.66, minscore=100, threads
         # store
         q2matches[q].append((qstart, qend, t, tstart, tend, qstrand))
     return q2matches, queries, targets
-    print "%s blocks for %s contigs"%(len(tblocks), len(queries))
+    #print "%s blocks for %s contigs"%(len(tblocks), len(queries))
 
 def tab2errors():
 	out = sys.stdout
 	fasta, ref = sys.argv[1:3]
-	process_hits(ref, fasta)    
+    for fn in (ref, fasta):
+        if not os.path.isfile(fn):
+            sys.stderr.write("No such file: %s\n"%fn)
+            sys.exit(1)
+    outfn = fasta+".t3e"
+    sys.stderr.write("Saving output to: %s\n"%outfn)
+    with open(outfn, "w") as out:
+    	process_hits(ref, fasta, out)
             
 if __name__=="__main__":
     t0 = datetime.now()

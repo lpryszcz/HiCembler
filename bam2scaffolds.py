@@ -284,7 +284,11 @@ def get_scaffolds(out, bam, fasta, clusters, mapq, minWindows, threads, verbose,
     contig2size = {c: stats[0] for c, stats in faidx.id2stats.iteritems()}
     
     # estimate distance parameters
-    params = estimate_distance_parameters(out, bam, mapq, contig2size, windowSize*1000)
+    try:
+        params = estimate_distance_parameters(out, bam, mapq, contig2size, windowSize*1000)
+    except Exception, e:
+        sys.stderr.write("[WARNING] Can't estimate distance parameters! %s\n"%str(e))
+        return []
     # 
     if threads > 1:
         p = Pool(threads)
@@ -354,8 +358,9 @@ def bam2scaffolds(bam, fasta, outdir, minSize, windowSizes, mapq, threads, dpi, 
         logger("Constructing scaffolds...")
         scaffolds = get_scaffolds(outbase, bam, fasta.name, clusters, mapq, minWindows, threads, verbose, windowSize)
 
-        logger("Reporting %s scaffolds..."%len(scaffolds))
-        fastafn = report_scaffolds(outbase, scaffolds, faidx)
+        if scaffolds:
+            logger("Reporting %s scaffolds..."%len(scaffolds))
+            fastafn = report_scaffolds(outbase, scaffolds, faidx)
     
     logger("Done!")
 
@@ -376,7 +381,7 @@ def main():
                         help="minimum contig length [%(default)s]")
     parser.add_argument("-n", "--nchr", default=0, type=int,
                         help="no. of chromosomes [estimate from data]")
-    parser.add_argument("-q", "--mapq", default=30, type=int,
+    parser.add_argument("-q", "--mapq", default=10, type=int,
                         help="mapping quality [%(default)s]")
     parser.add_argument("-u", "--upto", default=0, type=float,
                         help="process up to this number of reads from each library [all]")

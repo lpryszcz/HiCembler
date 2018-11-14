@@ -294,6 +294,7 @@ def estimate_distance_parameters(outbase, bam=None, mapq=10, contig2size=None, w
     """
     logger(" Estimating distance parameters...")
     # process bam
+    x, yn = [], []
     if bam and not c2dists:
         dists, contacts = get_distances_contacts(bam, mapq, contig2size, windowSize, icontigs, upto)
     # or use pre-computed insert sizes from longest contigs
@@ -312,6 +313,9 @@ def estimate_distance_parameters(outbase, bam=None, mapq=10, contig2size=None, w
                 nc = 1e6*nc / sum(c2dists[c])
                 #nc = 1.* nc / maxc
                 contacts[i-1].append(nc)
+                #if i<len(dists):
+                x.append(dists[i-1]/1000.)
+                yn.append(nc)
         # remove empty # skip first window (contacts to other chromosomes / contigs)
         _dists, _contacts = dists[1:-1], contacts[1:-1]
         dists, contacts = [], []
@@ -334,12 +338,12 @@ def estimate_distance_parameters(outbase, bam=None, mapq=10, contig2size=None, w
     plt.ylim(ymin=0)
     plt.savefig(outbase+".distance.png")
     
-    x = dists
-    yn = np.array([np.median(c) for c in contacts])
+    #x = dists
+    #yn = np.array([np.median(c) for c in contacts])
     step = dists[1]/4.
     xs = np.arange(0, max(x)+step, step)
-
-    params, pcov = curve_fit(contact_func, x[skipfirst:], yn[skipfirst:])#, maxfev=1000)
+    print len(x), len(yn), dists
+    params, pcov = curve_fit(contact_func, x[skipfirst:], yn[skipfirst:], maxfev=1000)
     outfn = outbase+".distance.params"
     with open(outfn, "w") as out:
         pickle.dump(params, out)
@@ -504,7 +508,7 @@ def bam2clusters(bam, fasta, outdir, minSize=2000, mapq=10, threads=4, dpi=100, 
         d = npy[npy.files[0]]
         params = pickle.load(open(outbase+".distance.params"))
             
-    # make symmetric - not neede if SK norm
+    # make symmetric
     d += d.T - np.diag(d.diagonal())
     #d = normalize(d)
     #params = estimate_distance_parameters(outbase, contig2size=contig2size, c2dists=c2dists, windowSize=minSize)
