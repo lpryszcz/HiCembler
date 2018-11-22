@@ -284,6 +284,7 @@ def get_scaffolds(out, bam, fasta, clusters, mapq, minWindows, threads, verbose,
     contig2size = {c: stats[0] for c, stats in faidx.id2stats.iteritems()}
     
     # estimate distance parameters
+    params = estimate_distance_parameters(out, bam, mapq, contig2size, windowSize*1000)
     try:
         params = estimate_distance_parameters(out, bam, mapq, contig2size, windowSize*1000)
     except Exception, e:

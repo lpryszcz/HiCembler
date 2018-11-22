@@ -337,12 +337,11 @@ def estimate_distance_parameters(outbase, bam=None, mapq=10, contig2size=None, w
     plt.xlim(xmin=-dists[1])
     plt.ylim(ymin=0)
     plt.savefig(outbase+".distance.png")
-    
-    #x = dists
-    #yn = np.array([np.median(c) for c in contacts])
+
+    if not x:
+        x, yn = dists, np.array([np.median(c) for c in contacts])
     step = dists[1]/4.
     xs = np.arange(0, max(x)+step, step)
-    print len(x), len(yn), dists
     params, pcov = curve_fit(contact_func, x[skipfirst:], yn[skipfirst:], maxfev=1000)
     outfn = outbase+".distance.params"
     with open(outfn, "w") as out:
